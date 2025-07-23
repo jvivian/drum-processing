@@ -1,0 +1,17 @@
+# drum-processing/environment.yml
+name: drum-processing
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  # Core dependencies
+  - numpy
+  - pandas
+  # Add your project dependencies here
+  
+  # Pip dependencies
+  - pip:
+    - -e .  # Install package in development mode
+  

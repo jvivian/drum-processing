@@ -1,0 +1,88 @@
+# drum-processing/pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drum-processing"
+version = "0.1.0"
+description = "Automate drum clip preprocessing"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "John Vivian", email = "jtvivian@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-xdist",
+    
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
+docs = [
+    
+    
+]
+
+[project.urls]
+Homepage = "https://github.com/jvivian/drum-processing"
+Repository = "https://github.com/jvivian/drum-processing"
+Issues = "https://github.com/jvivian/drum-processing/issues"
+
+[project.scripts]
+drum-processing = "drum_processing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-dir]
+
+
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # Allow assert statements in tests
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=drum_processing --cov-report=term-missing --cov-report=xml"

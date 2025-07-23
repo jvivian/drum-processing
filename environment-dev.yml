@@ -1,0 +1,30 @@
+# drum-processing/environment-dev.yml
+name: drum-processing-dev
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  # Core dependencies
+  - numpy
+  - pandas
+  
+  # Development and testing dependencies
+  - pytest
+  - pytest-cov
+  - pytest-xdist
+  
+  - ruff
+  
+  
+  - mypy
+  - pre-commit
+  - ipython
+  - jupyter
+  - build  # For python -m build
+  
+  # Pip dependencies
+  - pip:
+    - -e .  # Install package in development mode
+  
