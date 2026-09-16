@@ -1,10 +1,5 @@
-# drum-processing/drum_processing/__init__.py
-"""Automate drum clip preprocessing"""
+"""drumprep — turn a raw drum session into synced, mixed, grayscale take clips."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "John Vivian"
 __email__ = "jtvivian@gmail.com"
-
-from .core import hello_world
-
-__all__ = ["hello_world"]
