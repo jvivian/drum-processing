@@ -18,10 +18,6 @@ takes    auditok activity detection on the mix → take boundaries              
 render   one ffmpeg pass per take: trim, drift-correct, grayscale, mux studio audio
 ```
 
-The interactive **sync review** can write a 10 s A/B preview (camera audio hard-left,
-studio hard-right — a flam means out of sync). The **take review** lets you drop, merge,
-and star takes before rendering. Add `--yes` to skip both for unattended runs.
-
 ## Install
 
 ```bash
