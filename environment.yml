@@ -1,16 +1,12 @@
 # drum-processing/environment.yml
-name: drum-processing
+name: drumprep
 channels:
   - conda-forge
-  - defaults
 dependencies:
-  - python=3.11
-  - pip
-  # Core dependencies
+  - python=3.12
+  - ffmpeg           # conda-forge build: NVENC-enabled decode/filter/encode
   - numpy
-  - pandas
-  # Add your project dependencies here
-
-  # Pip dependencies
+  - scipy
+  - pip
   - pip:
-      - -e . # Install package in development mode
+      - -e .
