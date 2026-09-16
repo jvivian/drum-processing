@@ -1,113 +1,89 @@
-# drum-processing
+# drumprep
 
-[![CI](https://github.com/jvivian/drum-processing/workflows/CI/badge.svg)](https://github.com/jvivian/drum-processing/actions)
-[![codecov](https://codecov.io/gh/jvivian/drum-processing/branch/master/graph/badge.svg)](https://codecov.io/gh/jvivian/drum-processing)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 
-Automate drum clip preprocessing
+One CLI call to convert DJI clips + REAPER stems into a folder of
+upload-ready, synced, mixed, normalized, black-and-white take clips
 
-## Installation
 
-### Using Conda (Recommended)
 
-```bash
-# Clone the repository
-git clone https://github.com/jvivian/drum-processing.git
-cd drum-processing
+## Pipeline
 
-# Create conda environment from environment.yml
-conda env create -f environment.yml
-
-# Activate the environment
-conda activate drum-processing
+```
+ingest   discover + ffprobe every clip and stem → drumprep.json
+sync     onset-envelope GCC-PHAT: per-clip offset + clock-drift + confidence   [review]
+mix      pan/gain the stems → sum → two-pass EBU R128 to −14 LUFS / −1 dBTP
+takes    auditok activity detection on the mix → take boundaries               [review]
+render   one ffmpeg pass per take: trim, drift-correct, grayscale, mux studio audio
 ```
 
-### Development Installation
+The interactive **sync review** can write a 10 s A/B preview (camera audio hard-left,
+studio hard-right — a flam means out of sync). The **take review** lets you drop, merge,
+and star takes before rendering. Add `--yes` to skip both for unattended runs.
 
-For development, use the development environment which includes testing and linting tools:
-
-```bash
-# Create development environment
-conda env create -f environment-dev.yml
-
-# Activate the environment
-conda activate drum-processing-dev
-
-# Install pre-commit hooks
-pre-commit install
-```
-
-### Using pip
+## Install
 
 ```bash
-pip install drum-processing
+conda create -n drumprep -c conda-forge python=3.12 ffmpeg numpy scipy
+conda activate drumprep
+pip install -e .
 ```
 
-## Quick Start
+`ffmpeg` must be the conda-forge build (NVENC-enabled). NVENC is detected at runtime and
+falls back to `libx264 -crf 18` automatically (e.g. under WSL2 without GPU passthrough).
 
-```python
-import drum_processing
-
-# Your code here
-```
-
-### Command Line Interface
+## Usage
 
 ```bash
-drum-processing --help
+drumprep run   /path/to/session       # walk the whole pipeline
+drumprep run   /path/to/session --yes # unattended (no review screens)
+
+# or run one stage at a time (each reads/writes the same manifest):
+drumprep ingest /path/to/session
+drumprep sync   /path/to/session
+drumprep mix    /path/to/session
+drumprep takes  /path/to/session
+drumprep render /path/to/session
+drumprep status /path/to/session      # show the manifest
+drumprep clean  /path/to/session      # delete disposable work/ intermediates
 ```
 
-## Features
+A session directory just needs the DJI originals (`*.MP4`, HEVC preferred over any
+`-converted` copies) and the REAPER stem WAVs (`*-STL.wav`, `*-STR.wav`, `*Addictive
+Drums*.wav`). Sources are never modified; output lands in `out/takes/`.
 
-- Feature 1
-- Feature 2
-- Feature 3
+## Configuration
 
-## Documentation
+Drop an optional `drumprep.toml` in the session dir to override defaults (mix balance,
+loudness targets, take-detection thresholds, sync gates, output encoding):
 
+```toml
+[mix]
+target_lufs = -14.0
+target_true_peak = -1.0
 
+[[mix.stem]]
+match = "STL"
+pan = -0.5
 
+[[mix.stem]]
+match = "Addictive Drums"
+gain_db = -2.5      # relative balance only — absolute level comes from normalization
 
+[takes]
+max_silence_s = 4.0
+min_take_s = 20.0
+```
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-### Development Setup
-
-1. Fork the repository
-2. Create a new branch for your feature
-3. Make your changes
-4. Run the tests
-5. Submit a pull request
-
-### Running Tests
+## Development
 
 ```bash
+pip install -e ".[dev]"
 pytest
-```
-
-### Code Formatting
-
-
-
-And [Ruff](https://docs.astral.sh/ruff/) for linting:
-
-```bash
 ruff check drum_processing/ tests/
 ```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Authors
-
-- **John Vivian** - *Initial work* - [jvivian](https://github.com/jvivian)
-
-## Acknowledgments
-
-- Hat tip to anyone whose code was used
-- Inspiration
-- etc
+MIT — see [LICENSE](LICENSE). © John Vivian.
