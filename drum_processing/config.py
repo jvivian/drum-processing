@@ -36,11 +36,16 @@ class MixConfig(BaseModel):
 
 
 class TakesConfig(BaseModel):
-    max_silence_s: float = 4.0  # gap longer than this ends a take
+    # Detect on the MIDI/Addictive Drums stem — it only has signal when John is
+    # actually playing, unlike the room mics that pick up backing music continuously.
+    # Set to None (or a match with no stem) to fall back to the summed mix.
+    detect_stem_match: str | None = "Addictive Drums"
+    max_silence_s: float = 20.0  # gap longer than this ends a take (keeps 15-20s song
+    #                              gaps whole; a real stop splits)
     min_take_s: float = 20.0  # reject shorter detections as false positives
     pre_roll_s: float = 1.5  # lead-in kept before the first hit
-    post_roll_s: float = 2.5  # let the last cymbal ring out
-    energy_threshold: float = 50.0  # auditok energy floor; calibrate per room
+    post_roll_s: float = 3.0  # let the room-mic cymbal ring out past the last MIDI note
+    energy_threshold: float = 50.0  # auditok energy floor; calibrate per source
 
 
 class SyncConfig(BaseModel):

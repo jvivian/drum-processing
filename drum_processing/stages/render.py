@@ -85,7 +85,7 @@ def run(session_dir: Path, manifest: Manifest, config: Config, console: Console,
     if full_clips or not manifest.takes:
         _render_full_clips(session_dir, manifest, config, console, ref_dur, stage_progress)
     else:
-        _render_takes(session_dir, manifest, config, console, ref_dur, stage_progress)
+        _render_takes(session_dir, manifest, config, console, ref_dur)
 
     manifest.mark_done("render")
     manifest.save(session_dir)
@@ -110,11 +110,27 @@ def _render_full_clips(session_dir, manifest, config, console, ref_dur, stage_pr
                   render_segment(session_dir, c, s, config, ci, co, o, on_progress=cb))
 
 
-def _render_takes(session_dir, manifest, config, console, ref_dur, stage_progress):
+def _render_takes(session_dir, manifest, config, console, ref_dur):
+    """Render each take, filling its segment on the session timeline live as it finishes."""
+    from rich.console import Group
+    from rich.live import Live
+
+    from ..tui import timeline as tl
+    from ..tui.progress import make_progress
+
     out_dir = session_dir / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
     takes = [t for t in manifest.takes if not t.dropped]
-    with stage_progress(console, "Rendering takes") as track:
+
+    console.print(tl.breakdown(manifest, ref_dur))
+    progress = make_progress(console)
+    rendered: set[int] = set()
+
+    def view(active: int | None) -> Group:
+        panel = tl.master_panel(manifest, ref_dur, console.width, frozenset(rendered), active)
+        return Group(panel, progress)
+
+    with Live(view(None), console=console, refresh_per_second=8) as live:
         for take in takes:
             clip = manifest.clip(take.clip)
             sync = manifest.sync_for(take.clip)
@@ -122,10 +138,18 @@ def _render_takes(session_dir, manifest, config, console, ref_dur, stage_progres
                 continue
             name = f"{take.index:03d}_t{int(take.start_s)//60}m{int(take.start_s)%60:02d}s"
             out_path = out_dir / f"{name}.mp4"
-            track(name, take.duration_s,
-                  lambda cb, c=clip, s=sync, t=take, o=out_path:
-                  render_segment(session_dir, c, s, config, t.start_s, t.end_s, o,
-                                 on_progress=cb))
+            task = progress.add_task(name, total=max(take.duration_s, 0.001))
+            live.update(view(active=take.index))  # paint this take yellow
+
+            def cb(done, _task=task, _dur=take.duration_s):
+                progress.update(_task, completed=min(done, _dur))
+
+            render_segment(session_dir, clip, sync, config, take.start_s, take.end_s,
+                           out_path, on_progress=cb)
+            progress.update(task, completed=take.duration_s)
+            rendered.add(take.index)
+            live.update(view(active=None))  # flip it to done (bright green)
+
             if config.output.sidecars:
                 _write_sidecars(session_dir, manifest, take, out_dir / f"{name}_stems")
 

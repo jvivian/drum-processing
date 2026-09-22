@@ -18,6 +18,18 @@ from rich.progress import (
 )
 
 
+def make_progress(console: Console) -> Progress:
+    """A Progress with our standard columns — reused by stage_progress and the
+    live render timeline."""
+    return Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    )
+
+
 @contextmanager
 def stage_progress(console: Console, description: str):
     """Context manager yielding a helper that runs one ffmpeg job with a bar.
@@ -28,14 +40,7 @@ def stage_progress(console: Console, description: str):
             track("clip 001", total_s, lambda cb: media.run(args, total_s=total_s,
                                                              on_progress=cb))
     """
-    progress = Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
-        transient=False,
-    )
+    progress = make_progress(console)
 
     def track(label: str, total_s: float, runner) -> None:
         task = progress.add_task(label, total=max(total_s, 0.001))
