@@ -23,6 +23,7 @@ app = typer.Typer(
     help="Turn a raw drum session into synced, mixed, grayscale take clips.",
     no_args_is_help=True,
     add_completion=False,
+    context_settings={"show_default": True},  # show option defaults in --help
 )
 console = Console()
 
