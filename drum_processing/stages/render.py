@@ -122,7 +122,6 @@ def _render_takes(session_dir, manifest, config, console, ref_dur):
     out_dir.mkdir(parents=True, exist_ok=True)
     takes = [t for t in manifest.takes if not t.dropped]
 
-    console.print(tl.breakdown(manifest, ref_dur))
     progress = make_progress(console)
     rendered: set[int] = set()
 

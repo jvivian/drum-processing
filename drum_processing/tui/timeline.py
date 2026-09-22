@@ -13,13 +13,14 @@ from rich.text import Text
 from ..manifest import Manifest
 from ..stages.render import _overlap
 
-# Cell styles, in ascending precedence (later paints win).
-C_AUDIO = "grey30"        # studio audio with no camera coverage
-C_CLIP_A = "blue"         # clip-covered (alternating shades per clip)
-C_CLIP_B = "dodger_blue2"
-C_TAKE = "green"          # a detected take, not yet rendered
-C_RENDERED = "bright_green"
+# Cell styles, in ascending precedence (later paints win). Filmed/no-video are grey
+# backdrops; the take states use distinct saturated hues (blue → yellow → green).
+C_AUDIO = "grey27"        # studio audio with no camera coverage
+C_CLIP_A = "grey54"       # clip-covered backdrop (alternating shades per clip)
+C_CLIP_B = "grey42"
+C_TAKE = "deep_sky_blue1"  # a detected take, not yet rendered
 C_ACTIVE = "yellow"       # currently rendering
+C_RENDERED = "green1"     # rendered / done
 
 
 def _synced_clips(manifest: Manifest):
