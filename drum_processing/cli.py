@@ -75,11 +75,20 @@ def _apply_overrides(config: Config, *, max_silence: float | None = None,
 
 
 def _show_timeline(session_dir: Path, manifest: Manifest) -> None:
+    """Static breakdown + bar — used by `status` (the bar itself is a render-time view)."""
     ref_dur = _ref_dur(session_dir)
     if ref_dur and manifest.takes:
         from .tui import timeline as tl
 
         tl.show_timeline(console, manifest, ref_dur)
+
+
+def _show_breakdown(manifest: Manifest) -> None:
+    """Just the takes-by-clip table (no timeline bar) — shown after take detection."""
+    if manifest.takes:
+        from .tui import timeline as tl
+
+        console.print(tl.breakdown(manifest))
 
 
 DirArg = typer.Argument(..., help="Session directory containing clips + stems.")
@@ -162,7 +171,7 @@ def takes(
     takes_stage.run(session_dir, manifest, config, console)
     if not yes:
         review_takes.review(session_dir, manifest, config, console)
-    _show_timeline(session_dir.expanduser().resolve(), manifest)
+    _show_breakdown(manifest)
 
 
 @app.command()
@@ -243,7 +252,7 @@ def run(
         takes_stage.run(session_dir, manifest, config, console)
         if not yes:
             review_takes.review(session_dir, manifest, config, console)
-        _show_timeline(session_dir, manifest)
+        _show_breakdown(manifest)
 
     if "render" in active:
         console.rule("[bold]Render")

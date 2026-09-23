@@ -42,10 +42,15 @@ def _take_span(manifest: Manifest, take) -> tuple[float, float]:
     return s.offset_s + (1 + b) * take.start_s, s.offset_s + (1 + b) * take.end_s
 
 
-def _paint(styles: list[str], lo_frac: float, hi_frac: float, style: str) -> None:
-    n = len(styles)
+def _cells(lo_frac: float, hi_frac: float, n: int) -> tuple[int, int]:
+    """Half-open cell range [i0, i1) for a fractional span (always ≥ 1 cell wide)."""
     i0 = max(0, int(lo_frac * n))
     i1 = min(n, max(i0 + 1, int(round(hi_frac * n))))
+    return i0, i1
+
+
+def _paint(styles: list[str], lo_frac: float, hi_frac: float, style: str) -> None:
+    i0, i1 = _cells(lo_frac, hi_frac, len(styles))
     for i in range(i0, i1):
         styles[i] = style
 
@@ -57,8 +62,9 @@ def _fmt(s: float) -> str:
 
 def master_bar(manifest: Manifest, ref_dur: float, width: int,
                rendered: frozenset[int] = frozenset(), active: int | None = None) -> Text:
-    n = max(10, min(width - 2, 100))
+    n = max(10, min(width - 2, 240))  # use the full width for a granular bar
     styles = [C_AUDIO] * n
+    owner: list[int | None] = [None] * n  # which take occupies each cell (for borders)
     for i, (clip, sync) in enumerate(_synced_clips(manifest)):
         lo, hi = _clip_span(manifest, clip, sync, ref_dur)
         _paint(styles, lo / ref_dur, hi / ref_dur, C_CLIP_A if i % 2 == 0 else C_CLIP_B)
@@ -68,11 +74,18 @@ def master_bar(manifest: Manifest, ref_dur: float, width: int,
         lo, hi = _take_span(manifest, take)
         style = (C_ACTIVE if take.index == active
                  else C_RENDERED if take.index in rendered else C_TAKE)
-        _paint(styles, lo / ref_dur, hi / ref_dur, style)
+        i0, i1 = _cells(lo / ref_dur, hi / ref_dur, n)
+        for i in range(i0, i1):
+            styles[i] = style
+            owner[i] = take.index
 
     bar = Text()
-    for st in styles:
-        bar.append("█", style=st)
+    for i in range(n):
+        # A thin dark gap borders adjacent takes so they don't merge into one blob.
+        if i and owner[i] is not None and owner[i - 1] is not None and owner[i] != owner[i - 1]:
+            bar.append(" ")
+        else:
+            bar.append("█", style=styles[i])
     return bar
 
 
@@ -91,7 +104,7 @@ def master_panel(manifest: Manifest, ref_dur: float, width: int,
     return Group(title, master_bar(manifest, ref_dur, width, rendered, active), _legend())
 
 
-def breakdown(manifest: Manifest, ref_dur: float) -> Table:
+def breakdown(manifest: Manifest, ref_dur: float | None = None) -> Table:
     """Per-clip take list: which takes come from which clip and how long they are."""
     table = Table(title="Takes by clip", header_style="bold cyan", show_edge=True)
     for col in ("clip", "#", "window (audio)", "dur"):
