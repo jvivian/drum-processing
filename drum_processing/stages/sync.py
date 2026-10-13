@@ -17,12 +17,13 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from rich.console import Console
+from rich.text import Text
 
 from ..config import Config
 from ..gcc_phat import fit_drift, gcc_phat
 from ..manifest import Manifest, SyncResult
 from ..onset import onset_envelope
+from ..tui.timeline import clip_short
 from .reference import CORRELATION_FS, ensure_reference
 from .scratch import ensure_scratch
 
@@ -98,28 +99,44 @@ def sync_clip(clip_env: np.ndarray, ref_env: np.ndarray, efs: float,
     )
 
 
-def run(session_dir: Path, manifest: Manifest, config: Config, console: Console) -> None:
+def _result_detail(res: SyncResult) -> Text:
+    """``offset 20.383s   drift -192 ppm   resid 2 ms   conf 48.8``
+
+    Labels dim, figures bright: the eye should land on the numbers, and the units
+    should not compete with them. Widths are fixed so the columns line up across
+    clips without needing a table.
+    """
+    text = Text()
+    for label, value, unit in (
+        ("offset", f"{res.offset_s:9.3f}", "s"),
+        ("drift", f"{res.drift_ppm:+5.0f}", " ppm"),
+        ("resid", f"{res.residual_ms:3.0f}", " ms"),
+        ("conf", f"{res.confidence:5.1f}", ""),
+    ):
+        text.append(f"{label} ", style="label")
+        text.append(value, style="metric")
+        if unit:
+            text.append(unit, style="unit")
+        text.append("   ")
+    return text
+
+
+def run(session_dir: Path, manifest: Manifest, config: Config, st) -> None:
     session_dir = Path(session_dir)
     hop, nfft = config.sync.env_hop, config.sync.env_nfft
 
-    with console.status("[bold]Building correlation reference…"):
+    with st.step("building correlation reference…"):
         ref_path = ensure_reference(session_dir, manifest)
         ref_env, efs = onset_envelope(_load_mono(ref_path), CORRELATION_FS, hop, nfft)
 
     results: list[SyncResult] = []
     for clip in manifest.clips:
-        with console.status(f"[bold]Syncing[/] {clip.name}"):
+        with st.step(f"syncing {clip.name}"):
             scratch = ensure_scratch(session_dir, clip)
             clip_env, _ = onset_envelope(_load_mono(scratch), CORRELATION_FS, hop, nfft)
             res = sync_clip(clip_env, ref_env, efs, clip.duration_s, clip.name, config)
         results.append(res)
-        icon = {"ok": "[green]✓[/]", "low_confidence": "[yellow]? review[/]",
-                "no_match": "[red]✗ no match[/]"}[res.status]
-        console.print(
-            f"  {clip.name}: offset={res.offset_s:8.3f}s  "
-            f"drift={res.drift_ppm:+6.0f}ppm  resid={res.residual_ms:4.0f}ms  "
-            f"conf={res.confidence:6.1f}  {icon}"
-        )
+        st.item(res.status, f"{clip_short(clip.name)}  ", _result_detail(res))
 
     manifest.sync = results
     manifest.mark_done("sync")
