@@ -21,7 +21,6 @@ from rich.progress import (
     Task,
     TaskProgressColumn,
     TextColumn,
-    TimeElapsedColumn,
     TimeRemainingColumn,
 )
 from rich.text import Text
@@ -35,6 +34,25 @@ class SpeedColumn(ProgressColumn):
         if not speed:
             return Text("", style="progress.data.speed")
         return Text(f"×{speed:.1f}", style="progress.data.speed")
+
+
+class ElapsedColumn(ProgressColumn):
+    """``12:04`` — elapsed, in the same m:ss shape as the ETA beside it.
+
+    rich's TimeElapsedColumn renders ``0:00:00`` while TimeRemainingColumn(compact)
+    renders ``--:--``; two time formats side by side on one line is exactly the
+    kind of detail that reads as unconsidered.
+    """
+
+    def render(self, task: Task) -> Text:
+        elapsed = task.finished_time if task.finished else task.elapsed
+        if elapsed is None:
+            return Text("--:--", style="progress.elapsed")
+        minutes, seconds = divmod(int(elapsed), 60)
+        hours, minutes = divmod(minutes, 60)
+        text = (f"{hours}:{minutes:02d}:{seconds:02d}" if hours
+                else f"{minutes:02d}:{seconds:02d}")
+        return Text(text, style="progress.elapsed")
 
 
 def columns_item(console: Console) -> tuple[ProgressColumn, ...]:
@@ -55,7 +73,7 @@ def columns_total(console: Console) -> tuple[ProgressColumn, ...]:
         BarColumn(bar_width=None, style="bar.back",
                   complete_style="bar.complete", finished_style="bar.finished"),
         TaskProgressColumn(),
-        TimeElapsedColumn(),
+        ElapsedColumn(),
         TextColumn("eta", style="faint"),
         TimeRemainingColumn(compact=True),
     )

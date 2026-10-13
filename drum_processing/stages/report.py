@@ -32,10 +32,13 @@ def _fps(value: float) -> str:
 
 
 def clips_table(manifest: Manifest) -> Table:
+    # Only the filename is a `c_name`, so a narrow terminal truncates that
+    # (recoverable) instead of turning "original" into "origin" or "10:00" into
+    # "10:…" — see the column factories in chrome.
     t = chrome.table(
-        chrome.c_text("clip"), chrome.c_text("codec"), chrome.c_text("res"),
-        chrome.c_num("fps"), chrome.c_time("dur"),
-        chrome.c_text("audio"), chrome.c_text("source", style="provenance"),
+        chrome.c_name("clip"), chrome.c_text("codec"), chrome.c_text("res"),
+        chrome.c_num("fps"), chrome.c_time("dur"), chrome.c_text("audio"),
+        chrome.c_text("source", style="provenance"),
     )
     for c in manifest.clips:
         fps = Text(_fps(c.fps), style="value")
@@ -52,7 +55,7 @@ def clips_table(manifest: Manifest) -> Table:
 
 def stems_table(manifest: Manifest) -> Table:
     t = chrome.table(
-        chrome.c_text("stem"), chrome.c_text("role"), chrome.c_text("codec"),
+        chrome.c_name("stem"), chrome.c_text("role"), chrome.c_text("codec"),
         chrome.c_num("rate"), chrome.c_num("ch"), chrome.c_time("dur"),
     )
     for s in manifest.stems:
@@ -66,7 +69,7 @@ def stems_table(manifest: Manifest) -> Table:
 
 def sync_table(manifest: Manifest, console: Console) -> Table:
     t = chrome.table(
-        chrome.c_text("clip"), chrome.c_time("offset"), chrome.c_num("drift"),
+        chrome.c_name("clip"), chrome.c_time("offset"), chrome.c_num("drift"),
         chrome.c_num("resid"), chrome.c_num("conf"), chrome.c_text("status"),
     )
     for r in manifest.sync:
@@ -85,7 +88,7 @@ def sync_table(manifest: Manifest, console: Console) -> Table:
 def takes_table(manifest: Manifest) -> Table:
     g = theme.GLYPHS
     t = chrome.table(
-        chrome.c_num("#"), chrome.c_text("clip"), chrome.c_time("start"),
+        chrome.c_num("#"), chrome.c_name("clip"), chrome.c_time("start"),
         chrome.c_time("end"), chrome.c_time("dur"),
         chrome.c_flag(g["star"], style="star"), chrome.c_num("LUFS"),
     )
@@ -144,8 +147,12 @@ def sync_summary(manifest: Manifest) -> Text:
     tally: dict[str, int] = {}
     for r in manifest.sync:
         tally[r.status] = tally.get(r.status, 0) + 1
-    rows = [(str(count), theme.STATUS.get(status, (None, None, status))[2])
-            for status, count in sorted(tally.items())]
+    # Ordered by severity (the STATUS declaration order), not alphabetically, so
+    # "2 ok · 1 review" reads as a verdict rather than a sorted list.
+    rows = [(str(tally[status]), theme.STATUS[status][2])
+            for status in theme.STATUS if status in tally]
+    rows += [(str(count), status) for status, count in tally.items()
+             if status not in theme.STATUS]
     return _counts(rows) if rows else Text("nothing to sync", style="muted")
 
 
@@ -206,7 +213,7 @@ def closing(console: Console, session_dir: Path, manifest: Manifest, *,
         rows.append(("output", _counts([(str(files), "files"),
                                         (chrome.human_bytes(size), "")])))
     rows.append(("elapsed", chrome.human_dur(elapsed_s)))
-    rows.append(("", Text(str(out_dir), style="path")))
+    rows.append(("where", Text(str(out_dir), style="path")))
 
     footer = None
     if ref_dur and live:

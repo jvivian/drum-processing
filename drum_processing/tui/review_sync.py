@@ -83,7 +83,7 @@ def build_preview(session_dir: Path, manifest: Manifest, res: SyncResult) -> Pat
 def build_table(console: Console, manifest: Manifest) -> Table:
     """The review table. Returns rather than prints, so it can be tested."""
     t = chrome.table(
-        chrome.c_num("#"), chrome.c_text("clip"), chrome.c_time("offset"),
+        chrome.c_num("#"), chrome.c_name("clip"), chrome.c_time("offset"),
         chrome.c_num("drift"), chrome.c_num("conf"), chrome.c_text("status"),
     )
     for i, r in enumerate(manifest.sync):

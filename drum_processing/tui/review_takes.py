@@ -25,7 +25,7 @@ def _fmt(s: float) -> str:
 def build_table(console: Console, manifest: Manifest) -> Table:
     """The review table. Returns rather than prints, so it can be tested."""
     t = chrome.table(
-        chrome.c_num("#"), chrome.c_text("clip"), chrome.c_time("start"),
+        chrome.c_num("#"), chrome.c_name("clip"), chrome.c_time("start"),
         chrome.c_time("end"), chrome.c_time("dur"),
         chrome.c_flag(STAR, style="star"),
     )

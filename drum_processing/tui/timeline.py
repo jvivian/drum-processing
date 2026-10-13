@@ -13,7 +13,7 @@ Reused by ``status``/after-``takes`` (static) and by the render stage (live fill
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from rich.console import Console, Group, RenderableType
 from rich.style import Style
@@ -36,7 +36,7 @@ MIN_AXIS_CELLS = 32
 MIN_BAR_CELLS = 16
 
 
-class BarMode(str, Enum):
+class BarMode(StrEnum):
     HALF = "half"    # two layers in one row, via fg/bg of ▄
     STACK = "stack"  # two rows of █ — fallback for fonts with half-block seams
     GLYPH = "glyph"  # one row, distinct characters, no colour
@@ -333,7 +333,7 @@ def master_panel(manifest: Manifest, ref_dur: float, width: int,
 def breakdown(manifest: Manifest, ref_dur: float | None = None):
     """Per-clip take list: which takes come from which clip and how long they are."""
     table = chrome.table(
-        chrome.c_text("source clip"),
+        chrome.c_name("source clip"),
         chrome.c_num("#"),
         chrome.c_time("window (audio)"),
         chrome.c_time("dur"),

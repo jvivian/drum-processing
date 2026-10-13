@@ -108,21 +108,44 @@ def table(*columns: str | Column, title: str | None = None,
     )
 
 
-def c_text(name: str, *, style: str = "value", wrap: bool = False) -> Column:
-    return Column(name, justify="left", style=style, no_wrap=not wrap, overflow="fold")
+# Narrow terminals have to lose something, and these factories decide what.
+#
+# rich only shrinks columns it considers wrapable (`no_wrap=False`); if every
+# column is no_wrap it flat-reduces all of them and ignores min_width, which is
+# how "10:00" became "10:…" and "original" became "origin". So exactly one column
+# per table — the long name, via ``c_name`` — stays wrapable and absorbs the
+# shrink. A truncated filename is recoverable; a truncated figure is a lie.
+
+def c_name(header: str, *, style: str = "value") -> Column:
+    """The one flexible column in a table: the long, truncatable name.
+
+    A filename has no spaces to wrap at, so ``overflow="ellipsis"`` is what
+    actually happens when it is squeezed.
+    """
+    return Column(header, justify="left", style=style, no_wrap=False,
+                  overflow="ellipsis", min_width=8)
 
 
-def c_num(name: str, *, style: str = "value") -> Column:
+def c_text(header: str, *, style: str = "value", wrap: bool = False) -> Column:
+    """A short, fixed-vocabulary label. Never shrinks."""
+    return Column(header, justify="left", style=style, no_wrap=not wrap,
+                  overflow="fold" if wrap else "ellipsis")
+
+
+def c_num(header: str, *, style: str = "value") -> Column:
     """Numeric column. Right-aligned, because that is what makes figures scannable."""
-    return Column(name, justify="right", style=style, no_wrap=True)
+    return Column(header, justify="right", style=style, no_wrap=True,
+                  overflow="ignore")
 
 
-def c_time(name: str, *, style: str = "value") -> Column:
-    return Column(name, justify="right", style=style, no_wrap=True)
+def c_time(header: str, *, style: str = "value") -> Column:
+    return Column(header, justify="right", style=style, no_wrap=True,
+                  overflow="ignore")
 
 
-def c_flag(name: str, *, style: str = "value") -> Column:
-    return Column(name, justify="center", style=style, no_wrap=True)
+def c_flag(header: str, *, style: str = "value") -> Column:
+    return Column(header, justify="center", style=style, no_wrap=True,
+                  overflow="ignore")
 
 
 # ---- formatting ---------------------------------------------------------
@@ -304,7 +327,7 @@ def _summary_line(console: Console, name: str, body: Text, elapsed: float,
     left.append(name, style="strong")
     left.append("   ")
     left.append(body)
-    grid = table(c_text("", wrap=True), c_time(""), show_header=False,
+    grid = table(c_name(""), c_time(""), show_header=False,
                  expand=True, width=content_width(console))
     grid.add_row(left, Text(human_dur(elapsed), style="faint"))
     return grid
@@ -332,12 +355,14 @@ def stage(console: Console, name: str, *, index: int | None = None,
         else:
             yield st
     except BaseException:
+        blank(console)
         console.print(_summary_line(console, name, Text("failed", style="stage.failed"),
                                     st.elapsed, ok=False))
         _mark_printed(console)
         blank(console)
         raise
     body = st._summary if st._summary is not None else Text("done", style="muted")
+    blank(console)
     console.print(_summary_line(console, name, body, st.elapsed, ok=True))
     _mark_printed(console)
     blank(console)
@@ -351,8 +376,7 @@ def summary_card(console: Console, *, title: str,
     console.print(Text(title, style="heading"))
     _mark_printed(console)
     blank(console)
-    grid = table(c_text("", style="label"), c_text("", style="value", wrap=True),
-                 show_header=False)
+    grid = table(c_text("", style="label"), c_name(""), show_header=False)
     for label, value in rows:
         grid.add_row(Text(label, style="label"),
                      value if isinstance(value, Text) else Text(str(value)))

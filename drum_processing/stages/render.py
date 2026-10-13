@@ -182,11 +182,11 @@ def _render_takes(session_dir, manifest, config, st, ref_dur, *,
             item = item_p.add_task(name, total=max(take.duration_s, 0.001))
             live.update(view())
 
-            def cb(done_s, _dur=take.duration_s, _base=done_media):
+            def cb(done_s, _task=item, _dur=take.duration_s, _base=done_media):
                 # ffmpeg's out_time can overrun -t; clamp so the aggregate lands
                 # exactly on its total.
                 clamped = min(done_s, _dur)
-                item_p.update(item, completed=clamped)
+                item_p.update(_task, completed=clamped)
                 total_p.update(agg, completed=_base + clamped)
 
             try:
