@@ -15,7 +15,6 @@ from pathlib import Path
 import numpy as np
 import pyloudnorm as pyln
 import soundfile as sf
-from rich.console import Console
 
 from ..config import Config
 from ..manifest import Manifest
@@ -97,17 +96,17 @@ def _measure(master: Path) -> tuple[float, float]:
     return lufs, peak_dbfs
 
 
-def run(session_dir: Path, manifest: Manifest, config: Config, console: Console) -> None:
+def run(session_dir: Path, manifest: Manifest, config: Config, st) -> None:
     session_dir = Path(session_dir)
     if not manifest.stems:
         raise RuntimeError("No stems to mix.")
 
     master = session_dir / MASTER_REL
-    with console.status("[bold]Summing panned stems…"):
+    with st.step("summing panned stems…"):
         raw = _build_raw_mix(session_dir, manifest, config)
-    with console.status("[bold]Two-pass EBU R128 normalize…"):
+    with st.step("two-pass EBU R128 normalize…"):
         _two_pass_normalize(raw, master, config)
-    with console.status("[bold]Measuring loudness…"):
+    with st.step("measuring loudness…"):
         lufs, peak = _measure(master)
 
     manifest.mix.master_path = MASTER_REL
@@ -115,7 +114,3 @@ def run(session_dir: Path, manifest: Manifest, config: Config, console: Console)
     manifest.mix.measured_true_peak = peak
     manifest.mark_done("mix")
     manifest.save(session_dir)
-    console.print(
-        f"  master_mix: [green]{lufs:.1f} LUFS[/]  peak {peak:.2f} dBFS  "
-        f"(target {config.mix.target_lufs} / {config.mix.target_true_peak})"
-    )

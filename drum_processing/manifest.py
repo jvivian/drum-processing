@@ -52,7 +52,12 @@ SyncStatus = Literal["pending", "ok", "low_confidence", "no_match", "skip"]
 
 
 class SyncResult(BaseModel):
-    """Where a clip sits on the studio-audio timeline (stage 3)."""
+    """Where a clip sits on the studio-audio timeline (stage 3).
+
+    The clip↔audio mapping is affine: ``audio = offset_s + (1 + b) * clip``, where
+    ``b = drift_ppm / 1e6``. Every consumer (render, takes, timeline) goes through
+    the helpers below rather than re-deriving it.
+    """
 
     clip: str  # clip name this result belongs to
     offset_s: float = 0.0  # audio time at which the clip's t=0 lands
@@ -60,6 +65,27 @@ class SyncResult(BaseModel):
     confidence: float = 0.0  # peak / median of the correlation function
     residual_ms: float = 0.0  # drift-fit residual (QC)
     status: SyncStatus = "pending"
+
+    @property
+    def rate(self) -> float:
+        """Clip-to-audio clock ratio, ``1 + b``."""
+        return 1.0 + self.drift_ppm / 1e6
+
+    @property
+    def is_usable(self) -> bool:
+        """Whether this clip is aligned well enough to cut and render from."""
+        return self.status in ("ok", "low_confidence")
+
+    def audio_time(self, clip_t: float) -> float:
+        return self.offset_s + self.rate * clip_t
+
+    def clip_time(self, audio_t: float) -> float:
+        return (audio_t - self.offset_s) / self.rate
+
+    def overlap(self, clip: Clip, ref_dur: float) -> tuple[float, float]:
+        """The portion of ``clip`` (in clip time) that overlaps the studio audio."""
+        return (max(0.0, self.clip_time(0.0)),
+                min(clip.duration_s, self.clip_time(ref_dur)))
 
 
 class Take(BaseModel):

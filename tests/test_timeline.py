@@ -35,21 +35,27 @@ def test_take_and_clip_spans():
     assert (lo, hi) == (0.0, 100.0)
 
 
-def test_master_bar_styles():
+def test_model_layers():
     m = _manifest()
-    bar = tl.master_bar(m, ref_dur=100.0, width=42)  # ~40 cells
-    counts = Counter(str(sp.style) for sp in bar.spans)
-    assert counts[tl.C_TAKE] > 0          # the take (10–40s)
-    assert counts[tl.C_CLIP_A] > 0        # clip coverage outside the take
-    assert tl.C_AUDIO not in counts        # clip covers the whole ref here
+    model = tl.build_model(m, ref_dur=100.0, n=40)
+    assert Counter(model.take)[tl.S_TAKE] > 0     # the take (10–40s)
+    assert Counter(model.cover)[tl.S_FILM_A] > 0  # clip coverage
+    assert tl.S_VOID not in model.cover           # clip covers the whole ref here
 
 
-def test_master_bar_marks_rendered_and_active():
+def test_take_layer_does_not_erase_clip_coverage():
+    """The whole point of two layers: a painted take still reports its clip."""
     m = _manifest()
-    bar = tl.master_bar(m, 100.0, 42, rendered=frozenset({1}))
-    assert tl.C_RENDERED in {str(sp.style) for sp in bar.spans}
-    bar2 = tl.master_bar(m, 100.0, 42, active=1)
-    assert tl.C_ACTIVE in {str(sp.style) for sp in bar2.spans}
+    model = tl.build_model(m, ref_dur=100.0, n=40)
+    inside = [i for i, t in enumerate(model.take) if t == tl.S_TAKE]
+    assert inside
+    assert all(model.cover[i] == tl.S_FILM_A for i in inside)
+
+
+def test_model_marks_rendered_and_active():
+    m = _manifest()
+    assert tl.S_DONE in tl.build_model(m, 100.0, 40, rendered=frozenset({1})).take
+    assert tl.S_ACTIVE in tl.build_model(m, 100.0, 40, active=1).take
 
 
 def test_breakdown_lists_live_takes_only():
