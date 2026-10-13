@@ -7,6 +7,7 @@
 One CLI call to convert DJI clips + REAPER stems into a folder of
 upload-ready, synced, mixed, normalized, black-and-white take clips
 
+![CLI](docs/drumprep-cli-new-1.png)
 
 
 ## Pipeline
