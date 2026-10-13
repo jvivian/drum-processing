@@ -191,11 +191,18 @@ def render(
     """Render grayscale, synced, muxed take clips (stage 9)."""
     from .stages import render as render_stage
 
+    session_dir = session_dir.expanduser().resolve()
     manifest, config = _load(session_dir)
     _apply_overrides(config, bw_mode=bw_mode, no_sidecars=no_sidecars)
+    t0 = time.monotonic()
     with chrome.stage(console, "render") as st:
         outcome = render_stage.run(session_dir, manifest, config, st, full_clips=full)
         st.summary(report_stage.render_summary(outcome))
+    # The live timeline is transient, so the closing card is where the finished
+    # one gets printed — same as `run`.
+    report_stage.closing(console, session_dir, manifest,
+                         elapsed_s=time.monotonic() - t0, stages=["render"],
+                         ref_dur=_ref_dur(session_dir), outcome=outcome)
 
 
 @app.command()
