@@ -87,6 +87,18 @@ def test_step_inside_a_collapsing_stage_does_not_open_a_second_live():
     assert "-14.5 LUFS" in _output(console)
 
 
+def test_stage_live_is_transient_by_default():
+    """A non-transient Live leaves its last frame in scrollback, so the finished
+    render printed its timeline twice — once as the stale final frame (complete
+    with a "100% eta 00:00" bar) and once in the closing card."""
+    from rich.text import Text
+
+    console = _console(terminal=True)
+    with chrome.stage(console, "render") as st:
+        with st.live(lambda: Text("frame")) as live:
+            assert live.transient is True
+
+
 def test_live_inside_a_collapsing_stage_reuses_the_region():
     from rich.text import Text
 
