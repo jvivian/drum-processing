@@ -1,5 +1,6 @@
 # drumprep
 
+[![CI](https://github.com/jvivian/drum-processing/actions/workflows/ci.yml/badge.svg)](https://github.com/jvivian/drum-processing/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 
