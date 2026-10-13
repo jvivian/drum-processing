@@ -9,15 +9,17 @@ reusing the existing sync/mix intermediates).
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 import typer
-from rich.console import Console
+from rich.text import Text
 
 from .config import Config
 from .manifest import Manifest
 from .stages import ingest as ingest_stage
 from .stages import report as report_stage
+from .tui import chrome, theme
 
 app = typer.Typer(
     help="Turn a raw drum session into synced, mixed, grayscale take clips.",
@@ -25,16 +27,21 @@ app = typer.Typer(
     add_completion=False,
     context_settings={"show_default": True},  # show option defaults in --help
 )
-console = Console()
+console = theme.build_console()
+err = theme.build_console(stderr=True)
 
 STAGES = ["ingest", "sync", "mix", "takes", "render"]
+
+
+def _fail(message: str) -> typer.Exit:
+    err.print(Text(message, style="error"))
+    return typer.Exit(1)
 
 
 def _load(session_dir: Path) -> tuple[Manifest, Config]:
     session_dir = session_dir.expanduser().resolve()
     if not session_dir.is_dir():
-        console.print(f"[red]Not a directory:[/] {session_dir}")
-        raise typer.Exit(1)
+        raise _fail(f"Not a directory: {session_dir}")
     return Manifest.load(session_dir), Config.load(session_dir)
 
 
@@ -42,9 +49,9 @@ def _clean_work(session_dir: Path) -> None:
     work = session_dir / "work"
     if work.is_dir():
         shutil.rmtree(work)
-        console.print(f"[green]Removed[/] {work}")
+        chrome.write(console, Text.assemble(("removed  ", "label"), (str(work), "path")))
     else:
-        console.print("[dim]Nothing to clean.[/]")
+        chrome.write(console, Text("Nothing to clean.", style="muted"))
 
 
 def _ref_dur(session_dir: Path) -> float | None:
@@ -75,20 +82,12 @@ def _apply_overrides(config: Config, *, max_silence: float | None = None,
 
 
 def _show_timeline(session_dir: Path, manifest: Manifest) -> None:
-    """Static breakdown + bar — used by `status` (the bar itself is a render-time view)."""
+    """Static bar + breakdown — used by `status`."""
     ref_dur = _ref_dur(session_dir)
     if ref_dur and manifest.takes:
         from .tui import timeline as tl
 
         tl.show_timeline(console, manifest, ref_dur)
-
-
-def _show_breakdown(manifest: Manifest) -> None:
-    """Just the takes-by-clip table (no timeline bar) — shown after take detection."""
-    if manifest.takes:
-        from .tui import timeline as tl
-
-        console.print(tl.breakdown(manifest))
 
 
 DirArg = typer.Argument(..., help="Session directory containing clips + stems.")
@@ -99,9 +98,10 @@ def ingest(session_dir: Path = DirArg) -> None:
     """Discover + probe media, build the manifest (stage 0)."""
     session_dir = session_dir.expanduser().resolve()
     config = Config.load(session_dir)
-    console.rule("[bold]Ingest")
-    manifest, warnings = ingest_stage.ingest(session_dir, config)
-    report_stage.render(manifest, console, warnings)
+    with chrome.stage(console, "ingest") as st:
+        manifest, warnings = ingest_stage.ingest(session_dir, config)
+        report_stage.render(manifest, console, warnings, sections=("clips", "stems"))
+        st.summary(report_stage.ingest_summary(manifest, warnings))
 
 
 @app.command()
@@ -109,8 +109,10 @@ def status(session_dir: Path = DirArg) -> None:
     """Show the current manifest as tables + the session timeline."""
     manifest, _ = _load(session_dir)
     session_dir = session_dir.expanduser().resolve()
-    done = ", ".join(manifest.stages_done) or "none"
-    console.rule(f"[bold]{session_dir.name}[/]  ·  stages: {done}")
+    done = "  ".join(manifest.stages_done) or "none"
+    chrome.blank(console)
+    console.print(Text.assemble((session_dir.name, "heading"),
+                                ("    stages: ", "label"), (done, "value")))
     report_stage.render(manifest, console)
     _show_timeline(session_dir, manifest)
 
@@ -131,11 +133,12 @@ def sync(
     from .tui import review_sync
 
     manifest, config = _load(session_dir)
-    console.rule("[bold]Sync")
-    sync_stage.run(session_dir, manifest, config, console)
+    with chrome.stage(console, "sync") as st:
+        sync_stage.run(session_dir, manifest, config, st)
+        st.summary(report_stage.sync_summary(manifest))
     if not yes:
         review_sync.review(session_dir, manifest, config, console)
-    report_stage.render(manifest, console)
+        report_stage.render(manifest, console, sections=("sync",))
 
 
 @app.command()
@@ -148,9 +151,9 @@ def mix(
 
     manifest, config = _load(session_dir)
     _apply_overrides(config, lufs=lufs)
-    console.rule("[bold]Mix")
-    mix_stage.run(session_dir, manifest, config, console)
-    report_stage.render(manifest, console)
+    with chrome.stage(console, "mix", collapse=True) as st:
+        mix_stage.run(session_dir, manifest, config, st)
+        st.summary(report_stage.mix_summary(manifest, config))
 
 
 @app.command()
@@ -164,14 +167,16 @@ def takes(
     """Detect take boundaries on the MIDI stem (stages 6 + 8)."""
     from .stages import takes as takes_stage
     from .tui import review_takes
+    from .tui import timeline as tl
 
     manifest, config = _load(session_dir)
     _apply_overrides(config, max_silence=max_silence, min_take=min_take)
-    console.rule("[bold]Takes")
-    takes_stage.run(session_dir, manifest, config, console)
+    with chrome.stage(console, "takes") as st:
+        takes_stage.run(session_dir, manifest, config, st)
+        st.block("takes by clip", tl.breakdown(manifest))
+        st.summary(report_stage.takes_summary(manifest))
     if not yes:
         review_takes.review(session_dir, manifest, config, console)
-    _show_breakdown(manifest)
 
 
 @app.command()
@@ -188,8 +193,9 @@ def render(
 
     manifest, config = _load(session_dir)
     _apply_overrides(config, bw_mode=bw_mode, no_sidecars=no_sidecars)
-    console.rule("[bold]Render")
-    render_stage.run(session_dir, manifest, config, console, full_clips=full)
+    with chrome.stage(console, "render") as st:
+        outcome = render_stage.run(session_dir, manifest, config, st, full_clips=full)
+        st.summary(report_stage.render_summary(outcome))
 
 
 @app.command()
@@ -209,13 +215,13 @@ def run(
     session_dir = session_dir.expanduser().resolve()
     for name, val in (("--from", from_stage), ("--to", to_stage)):
         if val not in STAGES:
-            console.print(f"[red]{name} must be one of {STAGES}[/]")
-            raise typer.Exit(1)
+            raise _fail(f"{name} must be one of {STAGES}")
     i0, i1 = STAGES.index(from_stage), STAGES.index(to_stage)
     if i0 > i1:
-        console.print("[red]--from must not come after --to[/]")
-        raise typer.Exit(1)
-    active = set(STAGES[i0:i1 + 1])
+        raise _fail("--from must not come after --to")
+    active = STAGES[i0:i1 + 1]
+    total = len(active)
+    t_run = time.monotonic()
 
     config = Config.load(session_dir)
     _apply_overrides(config, max_silence=max_silence, min_take=min_take,
@@ -226,40 +232,52 @@ def run(
     from .stages import sync as sync_stage
     from .stages import takes as takes_stage
     from .tui import review_sync, review_takes
+    from .tui import timeline as tl
+
+    step = iter(range(1, total + 1))
+    outcome = None
 
     if "ingest" in active:
-        console.rule("[bold]Ingest")
-        manifest, warnings = ingest_stage.ingest(session_dir, config)
-        report_stage.render(manifest, console, warnings)
+        with chrome.stage(console, "ingest", index=next(step), total=total) as st:
+            manifest, warnings = ingest_stage.ingest(session_dir, config)
+            report_stage.render(manifest, console, warnings, sections=("clips", "stems"))
+            st.summary(report_stage.ingest_summary(manifest, warnings))
     else:
         manifest = Manifest.load(session_dir)
         if not manifest.clips:
-            console.print("[red]No manifest yet — run ingest first.[/]")
-            raise typer.Exit(1)
+            raise _fail("No manifest yet — run ingest first.")
 
     if "sync" in active:
-        console.rule("[bold]Sync")
-        sync_stage.run(session_dir, manifest, config, console)
+        with chrome.stage(console, "sync", index=next(step), total=total) as st:
+            sync_stage.run(session_dir, manifest, config, st)
+            st.summary(report_stage.sync_summary(manifest))
+        # Reviews sit outside the stage frame: prompt_toolkit draws its own screen
+        # and will not cooperate with a live region.
         if not yes:
             review_sync.review(session_dir, manifest, config, console)
 
     if "mix" in active:
-        console.rule("[bold]Mix")
-        mix_stage.run(session_dir, manifest, config, console)
+        with chrome.stage(console, "mix", index=next(step), total=total,
+                          collapse=True) as st:
+            mix_stage.run(session_dir, manifest, config, st)
+            st.summary(report_stage.mix_summary(manifest, config))
 
     if "takes" in active:
-        console.rule("[bold]Takes")
-        takes_stage.run(session_dir, manifest, config, console)
+        with chrome.stage(console, "takes", index=next(step), total=total) as st:
+            takes_stage.run(session_dir, manifest, config, st)
+            st.block("takes by clip", tl.breakdown(manifest))
+            st.summary(report_stage.takes_summary(manifest))
         if not yes:
             review_takes.review(session_dir, manifest, config, console)
-        _show_breakdown(manifest)
 
     if "render" in active:
-        console.rule("[bold]Render")
-        render_stage.run(session_dir, manifest, config, console)
+        with chrome.stage(console, "render", index=next(step), total=total) as st:
+            outcome = render_stage.run(session_dir, manifest, config, st)
+            st.summary(report_stage.render_summary(outcome))
 
-    console.rule("[bold]Done")
-    console.print(f"[green]Output in[/] {session_dir / 'out'}")
+    report_stage.closing(console, session_dir, manifest,
+                         elapsed_s=time.monotonic() - t_run, stages=active,
+                         ref_dur=_ref_dur(session_dir), outcome=outcome)
     if rm:
         _clean_work(session_dir)
 
