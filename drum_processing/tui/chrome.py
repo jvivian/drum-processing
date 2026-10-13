@@ -270,13 +270,22 @@ class Stage:
         return make_progress(self.console, *columns, speed_window=speed_window)
 
     @contextmanager
-    def live(self, build: Callable[[], RenderableType]) -> Iterator[Live]:
-        """Borrow the stage's live region. The caller re-renders via ``build``."""
+    def live(self, build: Callable[[], RenderableType],
+             transient: bool = True) -> Iterator[Live]:
+        """Borrow the stage's live region. The caller re-renders via ``build``.
+
+        Transient by default: the region is scaffolding for work in progress, and
+        a non-transient one leaves its last frame behind in scrollback — a stale
+        bar reading "100% eta 00:00" and a second copy of whatever it was
+        painting. The permanent record is the log lines above it and the summary
+        below; anything worth keeping gets reprinted deliberately.
+        """
         if self._live is not None:  # already inside the collapsing region
             self._live.update(build())
             yield self._live
             return
-        with Live(build(), console=self.console, refresh_per_second=8) as live:
+        with Live(build(), console=self.console, refresh_per_second=8,
+                  transient=transient) as live:
             self._live = live
             try:
                 yield live
