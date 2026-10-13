@@ -14,12 +14,15 @@ import questionary
 import soundfile as sf
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from ..config import Config
 from ..manifest import Manifest, SyncResult
 from ..media import run
 from ..stages.reference import CORRELATION_FS, REF_REL
 from ..stages.scratch import scratch_path
+from . import chrome, theme
+from .timeline import clip_short
 
 PREVIEW_S = 10.0
 
@@ -77,29 +80,33 @@ def build_preview(session_dir: Path, manifest: Manifest, res: SyncResult) -> Pat
     return out
 
 
-def _table(console: Console, manifest: Manifest) -> None:
-    t = Table(title="Sync review", header_style="bold cyan")
-    for col in ("#", "clip", "offset", "drift", "confidence", "status"):
-        t.add_column(col)
+def build_table(console: Console, manifest: Manifest) -> Table:
+    """The review table. Returns rather than prints, so it can be tested."""
+    t = chrome.table(
+        chrome.c_num("#"), chrome.c_text("clip"), chrome.c_time("offset"),
+        chrome.c_num("drift"), chrome.c_num("conf"), chrome.c_text("status"),
+    )
     for i, r in enumerate(manifest.sync):
-        mark = {"ok": "[green]✓[/]", "low_confidence": "[yellow]? review[/]",
-                "no_match": "[red]✗ no match[/]", "skip": "[dim]skip[/]",
-                "pending": "…"}[r.status]
-        t.add_row(str(i), r.clip,
+        t.add_row(str(i), clip_short(r.clip),
                   f"{r.offset_s:.3f}s" if r.status != "no_match" else "—",
-                  f"{r.drift_ppm:+.0f}ppm" if r.status == "ok" else "—",
-                  f"{r.confidence:.0f}", mark)
-    console.print(t)
+                  f"{r.drift_ppm:+.0f} ppm" if r.status == "ok" else "—",
+                  f"{r.confidence:.0f}",
+                  theme.status_text(console, r.status, label=True))
+    return t
 
 
 def review(session_dir: Path, manifest: Manifest, config: Config, console: Console) -> None:
     session_dir = Path(session_dir)
+    style = theme.questionary_style(console)
+    qmark = theme.glyphs(console)["step"]
     while True:
-        _table(console, manifest)
+        chrome.section(console, "sync review", build_table(console, manifest))
+        chrome.blank(console)
         action = questionary.select(
             "Sync review",
             choices=["accept all", "preview a clip", "nudge a clip",
                      "skip a clip", "quit"],
+            style=style, qmark=qmark,
         ).ask()
         if action in (None, "accept all"):
             break
@@ -110,26 +117,31 @@ def review(session_dir: Path, manifest: Manifest, config: Config, console: Conso
             "Which clip?",
             choices=[questionary.Choice(f"{i}: {r.clip}", value=i)
                      for i, r in enumerate(manifest.sync)],
+            style=style, qmark=qmark,
         ).ask()
         if idx is None:
             continue
         res = manifest.sync[idx]
 
         if action == "preview a clip":
-            with console.status("Building A/B preview…"):
+            with console.status(Text("building A/B preview…", style="muted")):
                 path = build_preview(session_dir, manifest, res)
-            console.print(f"[green]Preview:[/] {path}")
-            console.print("  [dim]camera=L, studio=R — a flam means out of sync[/]")
+            chrome.write(console, Text.assemble(("preview  ", "label"),
+                                                (str(path), "path")))
+            chrome.write(console, Text("camera=L, studio=R — a flam means out of sync",
+                                       style="faint"))
         elif action == "nudge a clip":
             ms = questionary.text("Offset nudge in ms (+ = clip later in audio):",
-                                  default="0").ask()
+                                  default="0", style=style, qmark=qmark).ask()
             try:
                 res.offset_s += float(ms) / 1000.0
                 res.status = "ok"
                 manifest.save(session_dir)
-                console.print(f"[green]Nudged[/] {res.clip} → offset {res.offset_s:.3f}s")
+                chrome.write(console, Text.assemble(
+                    ("nudged  ", "label"), (clip_short(res.clip), "value"),
+                    ("  → offset ", "label"), (f"{res.offset_s:.3f}s", "metric")))
             except (TypeError, ValueError):
-                console.print("[red]Not a number.[/]")
+                chrome.write(console, Text("Not a number.", style="error"))
         elif action == "skip a clip":
             res.status = "skip"
             manifest.save(session_dir)
