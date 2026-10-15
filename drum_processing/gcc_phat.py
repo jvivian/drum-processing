@@ -40,17 +40,18 @@ def gcc_phat(sig: np.ndarray, ref: np.ndarray, fs: float,
     R /= denom  # PHAT weighting
 
     cc = np.fft.irfft(R, n=nfft)
-    # Reorder so index 0 is zero lag, negative lags in the second half.
-    max_shift = nfft // 2
-    cc = np.concatenate((cc[-max_shift:], cc[: max_shift + 1]))
+    # cc[k] peaks at k ≡ -p (mod nfft), where p is sig's start position in ref.
+    # Valid positions span [-(len(sig)-1), len(ref)-1], which fits in nfft without
+    # ambiguity — so reorder by p directly. (Folding to ±nfft/2 instead wraps any
+    # p > nfft/2 negative: a clip starting late in a long reference gets lost.)
+    neg = nfft - ref.shape[0]  # index j <-> position p = j - neg
+    cc = cc[(neg - np.arange(nfft)) % nfft]
     mag = np.abs(cc)
 
     if max_lag_s is not None:
-        max_shift_samp = min(max_shift, int(round(max_lag_s * fs)))
-        center = max_shift
+        lim = int(round(max_lag_s * fs))
         window = np.zeros_like(mag)
-        lo = center - max_shift_samp
-        hi = center + max_shift_samp + 1
+        lo, hi = max(0, neg - lim), min(nfft, neg + lim + 1)
         window[lo:hi] = mag[lo:hi]
         mag_search = window
     else:
@@ -59,9 +60,8 @@ def gcc_phat(sig: np.ndarray, ref: np.ndarray, fs: float,
     peak = int(np.argmax(mag_search))
     # Parabolic interpolation for sub-sample precision.
     delta = _parabolic_offset(mag, peak)
-    lag_samples = (peak - max_shift) + delta
-    # Negate so +lag_s means "sig begins lag_s seconds into ref" (offset convention).
-    lag_s = -lag_samples / fs
+    # +lag_s means "sig begins lag_s seconds into ref" (offset convention).
+    lag_s = (peak - neg + delta) / fs
 
     median = float(np.median(mag[mag > 0])) if np.any(mag > 0) else 1e-12
     confidence = float(mag[peak] / median) if median else 0.0

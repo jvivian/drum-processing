@@ -42,6 +42,23 @@ def test_offset_with_noise_and_bandlimit():
     assert est.lag_s == pytest.approx(7.0, abs=0.02)
 
 
+@pytest.mark.parametrize("offset_s", [-2.0, 2.0, 45.0, 58.0])
+def test_recovers_offset_past_half_fft(offset_s):
+    """Positions beyond nfft/2 must not wrap negative (a late clip in a long session).
+
+    ref 60 s + clip 4 s -> nfft = 2^20 samples = 65.5 s, so nfft/2 = 32.8 s.
+    """
+    fs = 16000
+    ref = _bandlimited_noise(fs * 60, _rng())
+    start = int(offset_s * fs)
+    clip = np.zeros(fs * 4, dtype=np.float32)
+    lo, hi = max(start, 0), min(start + clip.size, ref.size)
+    clip[lo - start: hi - start] = ref[lo:hi]
+
+    est = gcc_phat(clip, ref, fs)
+    assert est.lag_s == pytest.approx(offset_s, abs=0.01)
+
+
 def test_drift_fit_slope():
     times = np.array([0.0, 100.0, 200.0, 300.0])
     # 50 ppm drift: offset grows 50e-6 s per second
