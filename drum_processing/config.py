@@ -65,7 +65,7 @@ class OutputConfig(BaseModel):
     nvenc_cq: int = 20  # h264_nvenc quality
     libx264_crf: int = 18  # fallback quality
     audio_bitrate: str = "320k"
-    sidecars: bool = True  # also write per-take stem WAVs
+    sidecars: bool = False  # also write per-take stem WAVs (opt-in: --stems)
 
 
 class Config(BaseModel):

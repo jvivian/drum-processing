@@ -25,16 +25,23 @@ def test_from_after_to_rejected(tmp_path):
 def test_apply_overrides():
     cfg = Config()
     _apply_overrides(cfg, max_silence=12.0, min_take=15.0, bw_mode="rec709_luma",
-                     no_sidecars=True, lufs=-16.0)
+                     stems=True, lufs=-16.0)
     assert cfg.takes.max_silence_s == 12.0
     assert cfg.takes.min_take_s == 15.0
     assert cfg.output.bw_mode == "rec709_luma"
-    assert cfg.output.sidecars is False
+    assert cfg.output.sidecars is True
     assert cfg.mix.target_lufs == -16.0
 
 
 def test_apply_overrides_noop_keeps_defaults():
     cfg = Config()
-    _apply_overrides(cfg)  # all None/False
+    _apply_overrides(cfg)  # all None
     assert cfg.takes.max_silence_s == 20.0
-    assert cfg.output.sidecars is True
+    assert cfg.output.sidecars is False
+
+
+def test_no_stems_overrides_toml_opt_in():
+    cfg = Config()
+    cfg.output.sidecars = True  # as if set in drumprep.toml
+    _apply_overrides(cfg, stems=False)
+    assert cfg.output.sidecars is False

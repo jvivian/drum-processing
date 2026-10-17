@@ -49,6 +49,7 @@ drumprep clean  /path/to/session      # delete disposable work/ intermediates
 
 `run` also takes `--from/--to` to walk a sub-range (`--from takes` re-detects and
 re-renders while reusing the existing sync and mix) and `--rm` to drop `work/` afterwards.
+`run` and `render` take `--stems` to also write per-take stem WAVs (off by default).
 
 A session directory just needs the DJI originals (`*.MP4`, HEVC preferred over any
 `-converted` copies) and the REAPER stem WAVs (`*-STL.wav`, `*-STR.wav`, `*Addictive
@@ -213,8 +214,9 @@ One ffmpeg invocation per take, decoding and encoding exactly once:
 - **NVENC is probed at runtime**, not merely looked up: under WSL2 ffmpeg lists
   `h264_nvenc` but fails to initialize it, so drumprep runs a tiny null-encode and falls
   back to `libx264 -crf 18` when that fails.
-- Per-take stem WAVs are written beside each MP4, so any take can be reopened in an editor
-  with everything already aligned at 00:00.
+- With `--stems` (or `output.sidecars = true`), per-take stem WAVs are written beside each
+  MP4, so any take can be remixed in a DAW with everything already aligned at 00:00. Off by
+  default — the MP4 already carries the finished mix.
 
 ### Manifest-driven stages
 

@@ -67,7 +67,7 @@ def _ref_dur(session_dir: Path) -> float | None:
 
 def _apply_overrides(config: Config, *, max_silence: float | None = None,
                      min_take: float | None = None, bw_mode: str | None = None,
-                     no_sidecars: bool = False, lufs: float | None = None) -> None:
+                     stems: bool | None = None, lufs: float | None = None) -> None:
     """Mutate a loaded Config with CLI overrides (None => leave the toml/default)."""
     if max_silence is not None:
         config.takes.max_silence_s = max_silence
@@ -75,8 +75,8 @@ def _apply_overrides(config: Config, *, max_silence: float | None = None,
         config.takes.min_take_s = min_take
     if bw_mode is not None:
         config.output.bw_mode = bw_mode
-    if no_sidecars:
-        config.output.sidecars = False
+    if stems is not None:
+        config.output.sidecars = stems
     if lufs is not None:
         config.mix.target_lufs = lufs
 
@@ -91,6 +91,8 @@ def _show_timeline(session_dir: Path, manifest: Manifest) -> None:
 
 
 DirArg = typer.Argument(..., help="Session directory containing clips + stems.")
+StemsOpt = typer.Option(None, "--stems/--no-stems",
+                        help="Also write per-take stem WAVs beside each MP4 (for remixing).")
 
 
 @app.command()
@@ -185,15 +187,14 @@ def render(
     full: bool = typer.Option(False, "--full", help="Render whole clips, not per-take."),
     bw_mode: str = typer.Option(None, "--bw-mode",
                                 help="chroma_zero | rec709_luma."),
-    no_sidecars: bool = typer.Option(False, "--no-sidecars",
-                                     help="Don't write per-take stem WAVs."),
+    stems: bool | None = StemsOpt,
 ) -> None:
     """Render grayscale, synced, muxed take clips (stage 9)."""
     from .stages import render as render_stage
 
     session_dir = session_dir.expanduser().resolve()
     manifest, config = _load(session_dir)
-    _apply_overrides(config, bw_mode=bw_mode, no_sidecars=no_sidecars)
+    _apply_overrides(config, bw_mode=bw_mode, stems=stems)
     t0 = time.monotonic()
     with chrome.stage(console, "render") as st:
         outcome = render_stage.run(session_dir, manifest, config, st, full_clips=full)
@@ -215,7 +216,7 @@ def run(
     max_silence: float = typer.Option(None, "--max-silence", help="Take-split gap (s)."),
     min_take: float = typer.Option(None, "--min-take", help="Reject takes shorter (s)."),
     bw_mode: str = typer.Option(None, "--bw-mode", help="chroma_zero | rec709_luma."),
-    no_sidecars: bool = typer.Option(False, "--no-sidecars", help="No stem sidecars."),
+    stems: bool | None = StemsOpt,
     lufs: float = typer.Option(None, "--lufs", help="Override integrated LUFS target."),
 ) -> None:
     """Walk the pipeline (or a --from/--to sub-range): ingest → sync → mix → takes → render."""
@@ -232,7 +233,7 @@ def run(
 
     config = Config.load(session_dir)
     _apply_overrides(config, max_silence=max_silence, min_take=min_take,
-                     bw_mode=bw_mode, no_sidecars=no_sidecars, lufs=lufs)
+                     bw_mode=bw_mode, stems=stems, lufs=lufs)
 
     from .stages import mix as mix_stage
     from .stages import render as render_stage
