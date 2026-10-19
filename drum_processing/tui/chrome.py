@@ -24,6 +24,7 @@ from rich.constrain import Constrain
 from rich.live import Live
 from rich.padding import Padding
 from rich.progress import Progress, ProgressColumn
+from rich.segment import Segment, Segments
 from rich.table import Column, Table
 from rich.text import Text
 
@@ -47,7 +48,7 @@ def indent(renderable: RenderableType, console: Console | None = None) -> Render
     padded = Padding(renderable, (0, 0, 0, GUTTER))
     if console is None:
         return padded
-    return Constrain(padded, GUTTER + content_width(console))
+    return Constrain(padded, _pane_frame_width(console))
 
 
 # ---- vertical rhythm ----------------------------------------------------
@@ -180,30 +181,172 @@ def dir_size(path: Path) -> tuple[int, int]:
     return total, count
 
 
+# ---- height budget ------------------------------------------------------
+
+#: Rows a pane leaves clear so its final frame cannot scroll the screen. rich's
+#: last frame ends in a newline, so one row of slack is the true floor; this
+#: keeps a second in hand.
+PANE_RESERVED = 3
+#: Below this many rows a pane is not worth drawing at all.
+MIN_PANE = 6
+
+
+def pane_width(console: Console) -> int:
+    """The width pane contents are *painted* at.
+
+    Two columns go to the gutter, and one more is left bare on the right. That
+    last column is not cosmetic: a row filled to exactly ``console.width`` makes
+    the terminal auto-wrap onto a second screen row, while rich still counts it
+    as one. Inside a live region that miscount is fatal — the teardown erases
+    fewer rows than were drawn and the pane is left on screen.
+
+    Measuring at ``console.width`` also overcounts what fits, and lets ``fit``
+    freeze a line too wide to ever re-wrap.
+    """
+    return min(content_width(console), max(1, console.width - GUTTER - 1))
+
+
+def _pane_frame_width(console: Console) -> int:
+    """Total width of an indented pane frame, gutter included."""
+    return GUTTER + pane_width(console)
+
+
+def measure(console: Console, renderable: RenderableType,
+            width: int | None = None) -> int:
+    """How many terminal lines ``renderable`` occupies when painted in a pane.
+
+    ``height=None`` is what makes this the *true* height rather than the height
+    clipped to the current terminal.
+    """
+    options = console.options.update(width=width or pane_width(console), height=None)
+    return len(console.render_lines(renderable, options, pad=False))
+
+
+def pane_budget(console: Console) -> int:
+    """Rows a stage's pane may occupy. Read fresh so a mid-run resize adapts."""
+    return max(MIN_PANE, console.height - PANE_RESERVED)
+
+
+def fit(console: Console, renderable: RenderableType, budget: int, *,
+        keep: str = "head", width: int | None = None) -> RenderableType:
+    """Clamp a renderable to ``budget`` lines.
+
+    We do this rather than leaning on rich's ``vertical_overflow`` because rich
+    crops the *bottom* — which is exactly where a pane pins its progress bars.
+
+    ``keep`` decides which end survives, and the two have opposite right answers:
+    a table must keep its **head** or it loses the header, while a growing log
+    must keep its **tail** or it freezes on the first few entries and shows those
+    for the rest of the run.
+    """
+    w = width or pane_width(console)
+    lines = console.render_lines(renderable, console.options.update(width=w, height=None),
+                                 pad=False)
+    if len(lines) <= budget:
+        return renderable
+    room = max(1, budget - 1)
+    kept = lines[:room] if keep == "head" else lines[-room:]
+    segments: list[Segment] = []
+    for line in kept:
+        segments.extend(line)
+        segments.append(Segment.line())
+    hidden = len(lines) - len(kept)
+    marker = Text(f"+{hidden} more" if keep == "head" else f"+{hidden} earlier",
+                  style="faint")
+    frozen = Segments(segments)
+    return Group(frozen, marker) if keep == "head" else Group(marker, frozen)
+
+
+# ---- the stepper --------------------------------------------------------
+
+def stepper(console: Console, stages: Sequence[str], current: int) -> Text:
+    """``✓ ingest ── ✓ sync ── mix ── takes ── render``
+
+    Where the run is, in one line. Completed stages keep their name but hand the
+    emphasis forward; the current one is the only thing on the strip at full
+    weight. At its longest this is 48 columns, so it needs no narrow-width
+    variant — it fits wherever a table does.
+    """
+    g = theme.glyphs(console)
+    text = Text()
+    for i, name in enumerate(stages):
+        if i:
+            text.append(f" {g['dash'] * 2} ", style="rule")
+        if i < current:
+            text.append(f"{g['ok']} ", style="ok")
+            text.append(name, style="muted")
+        elif i == current:
+            text.append(name, style="stage.name")
+        else:
+            text.append(name, style="faint")
+    return text
+
+
 # ---- stages -------------------------------------------------------------
+
+@dataclass
+class Ledger:
+    """What each stage did, kept for the closing card.
+
+    Panes are transient, so the run's narrative would otherwise vanish with the
+    last frame. This is the thread that survives it.
+    """
+
+    entries: list[tuple[str, Text, float, bool]] = field(default_factory=list)
+
+    def record(self, name: str, summary: Text, elapsed: float, ok: bool = True) -> None:
+        self.entries.append((name, summary, elapsed, ok))
+
+
+class _PaneLive:
+    """A stand-in for ``Live`` that composes into the pane instead of owning it.
+
+    Lets a stage body keep writing ``live.update(view())`` whether it has the
+    screen to itself or is sharing a pane with a stepper and a log.
+    """
+
+    def __init__(self, stage: Stage) -> None:
+        self._stage = stage
+
+    def update(self, renderable: RenderableType, **_: object) -> None:
+        self._stage.attach(renderable)
+
+    def refresh(self) -> None:
+        self._stage.refresh()
+
+    @property
+    def renderable(self) -> RenderableType:
+        return self._stage.render()
+
 
 @dataclass
 class Stage:
     """A pipeline stage's slice of the screen.
 
-    Stages receive one of these instead of a Console so that all output lands in
-    the same gutter, the live region has a single owner, and the elapsed time and
-    summary line come out in a consistent place.
+    Two presentations, one API. In **log mode** every method prints to scrollback
+    as it always has. In **pane mode** the stage owns one transient ``Live``
+    holding a stepper, a body and optionally a pinned renderable (progress bars,
+    the timeline); the whole thing is erased when the stage ends, and the
+    ``Ledger`` carries the summary forward to the closing card.
 
-    When ``collapse`` is set the body is buffered into a transient live region and
-    erased on exit, leaving only the header and summary — for stages whose output
-    is pure progress chatter nobody needs in scrollback.
+    Pane mode is what makes a stage affordable: its body costs nothing once the
+    stage is over, so a step can show whatever makes it legible.
     """
 
     name: str
     console: Console
     index: int | None = None
     total: int | None = None
-    collapse: bool = False
+    stages: list[str] | None = None
+    pane: bool = False
     t0: float = field(default_factory=time.monotonic)
     _summary: Text | None = field(default=None, repr=False)
     _live: Live | None = field(default=None, repr=False)
-    _buffer: list[RenderableType] = field(default_factory=list, repr=False)
+    _body: list[RenderableType] = field(default_factory=list, repr=False)
+    _extra: RenderableType | None = field(default=None, repr=False)
+    #: Which end of the body survives truncation. A replaced body is a table and
+    #: needs its header; an appended one is a log and needs its newest rows.
+    _keep: str = field(default="head", repr=False)
 
     @property
     def elapsed(self) -> float:
@@ -213,13 +356,87 @@ class Stage:
     def glyphs(self) -> dict[str, str]:
         return theme.glyphs(self.console)
 
+    # -- the pane ---------------------------------------------------------
+
+    def _head(self) -> RenderableType:
+        """The strip above the body: the run's stepper, or this stage's header."""
+        if self.stages:
+            return stepper(self.console, self.stages, (self.index - 1) if self.index else 0)
+        return _header(self.console, self.name, self.index, self.total)
+
+    def render(self) -> RenderableType:
+        """The pane: head strip, body, pinned extras — clamped to the budget.
+
+        Budgeted in priority order. What is pinned below is the live part (bars,
+        the timeline), so it is the *least* droppable thing and gets its rows
+        first; the body takes what is left. The composed frame is then clamped
+        again so no caller can overrun the pane silently.
+        """
+        budget = pane_budget(self.console)
+        head = self._head()
+        parts: list[RenderableType] = [head, Text("")]
+        used = measure(self.console, head) + 1
+
+        extra = self._extra
+        if extra is not None:
+            extra = fit(self.console, extra, max(1, budget - used))
+            used += measure(self.console, extra)
+
+        if self._body:
+            body = fit(self.console, Group(*self._body),
+                       max(1, budget - used), keep=self._keep)
+            parts.append(body)
+        if extra is not None:
+            parts.append(extra)
+
+        return indent(fit(self.console, Group(*parts), budget), self.console)
+
+    def height(self) -> int:
+        """Rows the composed pane occupies on screen.
+
+        Measured at the full console width, because ``render`` already wrapped
+        the contents in the gutter — measuring *that* at the content width would
+        charge for the gutter twice and overcount.
+        """
+        return measure(self.console, self.render(), width=self.console.width)
+
+    def refresh(self) -> None:
+        if self._live is not None:
+            self._live.update(self.render())
+
+    def attach(self, renderable: RenderableType | None) -> None:
+        """Pin a renderable below the body — progress bars, the live timeline."""
+        if not self.pane:
+            return
+        self._extra = renderable
+        self.refresh()
+
+    def set_body(self, renderable: RenderableType) -> None:
+        """Replace the body outright, for content that is rebuilt each tick.
+
+        No-op in log mode: a body that redraws has no meaning in scrollback, so
+        stages that use this emit per-item lines there instead.
+        """
+        if not self.pane:
+            return
+        self._body = [renderable]
+        self._keep = "head"
+        self.refresh()
+
     # -- body output ------------------------------------------------------
 
-    def _emit(self, renderable: RenderableType) -> None:
-        """Buffer into the collapsing region, else print above it / to scrollback."""
-        if self.collapse and self._live is not None:
-            self._buffer.append(indent(renderable, self.console))
-            self._live.update(Group(*self._buffer[-_COLLAPSE_LINES:]))
+    def _emit(self, renderable: RenderableType, keep: str = "tail") -> None:
+        """Append to the pane body.
+
+        ``keep`` records which end matters if the body later has to be clamped:
+        a running log wants its newest rows, a table wants its header. The last
+        thing written wins, which is what a stage that logs a line and then
+        shows a table actually wants.
+        """
+        if self.pane:
+            self._body.append(renderable)
+            self._keep = keep
+            self.refresh()
             return
         write(self.console, renderable)
 
@@ -242,8 +459,9 @@ class Stage:
         self._emit(text)
 
     def block(self, title: str, renderable: RenderableType) -> None:
-        if self.collapse and self._live is not None:
-            self._emit(renderable)
+        """A titled block — structured content, so it keeps its head when clamped."""
+        if self.pane:
+            self._emit(Group(Text(title, style="section"), renderable), keep="head")
             return
         section(self.console, title, renderable)
 
@@ -251,18 +469,72 @@ class Stage:
 
     @contextmanager
     def step(self, label: str) -> Iterator[None]:
-        """Transient progress for work with no measurable percentage.
+        """Work with no measurable percentage.
 
-        Replaces ``console.status``. Inside a collapsing stage, or off a terminal,
-        it degrades to one line — a second ``Live`` would raise, and a piped log
-        should still record what happened.
+        In a pane it becomes a checklist row that ticks itself off, so three
+        sequential steps read as progress rather than three identical spinners.
+        Off a terminal it is one printed line — a piped log should still record
+        what happened. A second ``Live`` is never opened; rich allows one.
         """
+        g = self.glyphs
+        if self.pane:
+            from rich.spinner import Spinner
+
+            slot = len(self._body)
+            # A real Spinner animates purely on re-render, so the pane's own
+            # refresh drives it — a step with no measurable progress still moves.
+            self._body.append(Spinner("dots", Text(label, style="muted"),
+                                      style="status.spinner"))
+            self._keep = "tail"
+            self.refresh()
+            try:
+                yield
+            except BaseException:
+                self._body[slot] = Text.assemble((f"{g['error']} ", "error"),
+                                                 (label, "muted"))
+                self.refresh()
+                raise
+            self._body[slot] = Text.assemble((f"{g['ok']} ", "ok"), (label, "muted"))
+            self.refresh()
+            return
         if self._live is not None or not self.console.is_terminal:
-            self._emit(Text(f"{self.glyphs['step']} {label}", style="muted"))
+            self._emit(Text(f"{g['step']} {label}", style="muted"))
             yield
             return
         with self.console.status(Text(label, style="muted"), spinner="dots"):
             yield
+
+    @contextmanager
+    def bar(self, label: str, total_s: float) -> Iterator[Callable[[float], None] | None]:
+        """A real progress bar pinned under the pane for one job's duration.
+
+        Yields an advance callback, or ``None`` when there is nothing to pin it
+        to or no duration to measure against — callers pass it straight to
+        ``media.run(on_progress=...)``, which treats ``None`` as "no progress".
+        """
+        if total_s <= 0:
+            yield None
+            return
+        progress = self.progress()
+        task = progress.add_task(label, total=total_s)
+        advance = lambda done_s: progress.update(task, completed=min(done_s, total_s))  # noqa: E731
+        if self.pane:
+            self.attach(progress)
+            try:
+                yield advance
+            finally:
+                self.attach(None)
+            return
+        # No pane to pin it to: run the bar as its own transient region. Under
+        # rich 15 a nested Live does not raise, it silently renders nothing —
+        # so this branch must never be taken while a pane is open.
+        with Live(progress, console=self.console, refresh_per_second=8,
+                  transient=True) as live:
+            self._live = live
+            try:
+                yield advance
+            finally:
+                self._live = None
 
     def progress(self, *columns: ProgressColumn, speed_window: float = 30.0) -> Progress:
         from .progress import make_progress
@@ -271,18 +543,24 @@ class Stage:
 
     @contextmanager
     def live(self, build: Callable[[], RenderableType],
-             transient: bool = True) -> Iterator[Live]:
-        """Borrow the stage's live region. The caller re-renders via ``build``.
+             transient: bool = True) -> Iterator[Live | _PaneLive]:
+        """Borrow a live region. The caller re-renders via ``build``.
 
-        Transient by default: the region is scaffolding for work in progress, and
-        a non-transient one leaves its last frame behind in scrollback — a stale
-        bar reading "100% eta 00:00" and a second copy of whatever it was
-        painting. The permanent record is the log lines above it and the summary
-        below; anything worth keeping gets reprinted deliberately.
+        In a pane the region already exists, so this returns a proxy that pins
+        the caller's renderable below the body rather than replacing the pane.
+
+        Standalone it is transient by default: the region is scaffolding, and a
+        non-transient one leaves its last frame in scrollback — a stale bar
+        reading "100% eta 00:00" and a second copy of whatever it was painting.
+        Anything worth keeping gets reprinted deliberately.
         """
-        if self._live is not None:  # already inside the collapsing region
-            self._live.update(build())
-            yield self._live
+        if self.pane:
+            proxy = _PaneLive(self)
+            self.attach(build())
+            try:
+                yield proxy
+            finally:
+                self.attach(None)
             return
         with Live(build(), console=self.console, refresh_per_second=8,
                   transient=transient) as live:
@@ -291,16 +569,14 @@ class Stage:
                 yield live
             finally:
                 self._live = None
-        _mark_printed(self.console)
+        if not transient:
+            _mark_printed(self.console)
 
     # -- summary ----------------------------------------------------------
 
     def summary(self, text: RenderableType | str) -> None:
         self._summary = text if isinstance(text, Text) else Text(str(text), style="value")
 
-
-#: How many buffered body lines a collapsing stage keeps on screen.
-_COLLAPSE_LINES = 6
 
 
 def _header(console: Console, name: str, index: int | None, total: int | None) -> Text:
@@ -344,19 +620,24 @@ def _summary_line(console: Console, name: str, body: Text, elapsed: float,
 
 @contextmanager
 def stage(console: Console, name: str, *, index: int | None = None,
-          total: int | None = None, collapse: bool = False) -> Iterator[Stage]:
-    """Run a pipeline stage inside a header / body / summary frame."""
-    # A transient region can't be collapsed into scrollback that isn't a screen.
-    collapse = collapse and console.is_terminal
-    blank(console)
-    console.print(_header(console, name, index, total))
-    _mark_printed(console)
-    blank(console)
+          total: int | None = None, stages: Sequence[str] | None = None,
+          pane: bool = False, ledger: Ledger | None = None) -> Iterator[Stage]:
+    """Run a pipeline stage, either as a transient pane or as a scrolling block.
 
-    st = Stage(name=name, console=console, index=index, total=total, collapse=collapse)
+    Pane mode needs a screen to erase, so it is forced off whenever there isn't
+    one — piped output and CI get the log exactly as before.
+    """
+    pane = pane and console.is_terminal
+    st = Stage(name=name, console=console, index=index, total=total,
+               stages=list(stages) if stages else None, pane=pane)
+    if not pane:
+        blank(console)
+        console.print(_header(console, name, index, total))
+        _mark_printed(console)
+        blank(console)
     try:
-        if collapse:
-            with Live(Text(""), console=console, refresh_per_second=8,
+        if pane:
+            with Live(st.render(), console=console, refresh_per_second=8,
                       transient=True) as live:
                 st._live = live
                 yield st
@@ -364,23 +645,48 @@ def stage(console: Console, name: str, *, index: int | None = None,
         else:
             yield st
     except BaseException:
+        st._live = None
+        failed = Text("failed", style="stage.failed")
+        if ledger is not None:
+            ledger.record(name, failed, st.elapsed, ok=False)
+        # Always printed, in both modes: the pane is gone by now and a failure
+        # is the one thing that must not vanish with it.
         blank(console)
-        console.print(_summary_line(console, name, Text("failed", style="stage.failed"),
-                                    st.elapsed, ok=False))
+        console.print(_summary_line(console, name, failed, st.elapsed, ok=False))
         _mark_printed(console)
         blank(console)
         raise
     body = st._summary if st._summary is not None else Text("done", style="muted")
-    blank(console)
-    console.print(_summary_line(console, name, body, st.elapsed, ok=True))
-    _mark_printed(console)
-    blank(console)
+    if ledger is not None:
+        ledger.record(name, body, st.elapsed, ok=True)
+    if not pane:
+        blank(console)
+        console.print(_summary_line(console, name, body, st.elapsed, ok=True))
+        _mark_printed(console)
+        blank(console)
+
+
+def ledger_table(console: Console, ledger: Ledger) -> Table:
+    """The stage ledger: what each step did and how long it took.
+
+    In pane mode this is the only permanent trace of the run's middle, so it
+    reuses each stage's own summary text verbatim.
+    """
+    grid = table(c_text("", style="label"), c_name(""), c_time(""),
+                 show_header=False, expand=True, width=content_width(console))
+    g = theme.glyphs(console)
+    for name, summary, elapsed, ok in ledger.entries:
+        mark = Text(f"{g['ok'] if ok else g['error']} ", style="ok" if ok else "error")
+        mark.append(name, style="strong" if ok else "stage.failed")
+        grid.add_row(mark, summary, Text(human_dur(elapsed), style="faint"))
+    return grid
 
 
 def summary_card(console: Console, *, title: str,
                  rows: Sequence[tuple[str, RenderableType | str]],
-                 footer: RenderableType | None = None) -> None:
-    """The closing frame: label/value pairs plus an optional renderable below."""
+                 footer: RenderableType | None = None,
+                 header: RenderableType | None = None) -> None:
+    """The closing frame: an optional ledger, label/value pairs, a renderable."""
     blank(console)
     console.print(Text(title, style="heading"))
     _mark_printed(console)
@@ -389,5 +695,11 @@ def summary_card(console: Console, *, title: str,
     for label, value in rows:
         grid.add_row(Text(label, style="label"),
                      value if isinstance(value, Text) else Text(str(value)))
-    write(console, Group(grid, *( [Text(""), footer] if footer is not None else [])))
+    parts: list[RenderableType] = []
+    if header is not None:
+        parts += [header, Text("")]
+    parts.append(grid)
+    if footer is not None:
+        parts += [Text(""), footer]
+    write(console, Group(*parts))
     blank(console)
