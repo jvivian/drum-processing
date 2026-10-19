@@ -50,9 +50,16 @@ def _detection_track(session_dir: Path, manifest: Manifest, config: Config,
         st.line(Text("no MIDI stem found — detecting on the summed mix", style="muted"))
     # Always regenerate (fast, one-stem decode) so it can't go stale when the source
     # stem or config changes.
-    ff_run(["-i", str(source), "-ac", "1", "-ar", "16000",
-            "-c:a", "pcm_s16le", str(detect)])
+    total_s = stem.duration_s if stem is not None else _master_dur(manifest)
+    with st.bar("decoding detection track", total_s) as advance:
+        ff_run(["-i", str(source), "-ac", "1", "-ar", "16000",
+                "-c:a", "pcm_s16le", str(detect)],
+               total_s=total_s or None, on_progress=advance)
     return detect
+
+
+def _master_dur(manifest: Manifest) -> float:
+    return max((s.duration_s for s in manifest.stems), default=0.0)
 
 
 def run(session_dir: Path, manifest: Manifest, config: Config, st) -> None:
