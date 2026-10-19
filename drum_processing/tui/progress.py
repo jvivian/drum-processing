@@ -11,8 +11,6 @@ speed" with no arithmetic of ours. The one rule: never re-send ``total`` after
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -93,24 +91,3 @@ def make_progress(console: Console, *columns: ProgressColumn,
         speed_estimate_period=speed_window,
         disable=not console.is_terminal,
     )
-
-
-@contextmanager
-def stage_progress(console: Console):
-    """Context manager yielding a helper that runs one ffmpeg job with a bar.
-
-    Usage::
-
-        with stage_progress(console) as track:
-            track("clip 001", total_s, lambda cb: media.run(args, total_s=total_s,
-                                                             on_progress=cb))
-    """
-    progress = make_progress(console)
-
-    def track(label: str, total_s: float, runner) -> None:
-        task = progress.add_task(label, total=max(total_s, 0.001))
-        runner(lambda done_s: progress.update(task, completed=min(done_s, total_s)))
-        progress.update(task, completed=max(total_s, 0.001))
-
-    with progress:
-        yield track
