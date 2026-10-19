@@ -37,7 +37,8 @@ def _pan_filter(pan: float, gain_db: float, label_in: str, label_out: str) -> st
     return f"[{label_in}]pan=stereo|c0={left:.5f}*c0|c1={right:.5f}*c1[{label_out}]"
 
 
-def _build_raw_mix(session_dir: Path, manifest: Manifest, config: Config) -> Path:
+def _build_raw_mix(session_dir: Path, manifest: Manifest, config: Config,
+                   on_progress=None) -> Path:
     """Sum the panned stems into a float WAV at the mix sample rate (headroom kept)."""
     raw = session_dir / RAW_REL
     args: list[str] = []
@@ -63,7 +64,8 @@ def _build_raw_mix(session_dir: Path, manifest: Manifest, config: Config) -> Pat
         "-c:a", "pcm_f32le",  # float: never clip before the loudness pass
         str(raw),
     ]
-    ff_run(args)
+    total_s = max((s.duration_s for s in manifest.stems), default=0.0)
+    ff_run(args, total_s=total_s or None, on_progress=on_progress)
     return raw
 
 
@@ -102,8 +104,11 @@ def run(session_dir: Path, manifest: Manifest, config: Config, st) -> None:
         raise RuntimeError("No stems to mix.")
 
     master = session_dir / MASTER_REL
-    with st.step("summing panned stems…"):
-        raw = _build_raw_mix(session_dir, manifest, config)
+    total_s = max((s.duration_s for s in manifest.stems), default=0.0)
+    with st.step("summing panned stems…"), st.bar("stems", total_s) as advance:
+        raw = _build_raw_mix(session_dir, manifest, config, on_progress=advance)
+    # ffmpeg-normalize is a separate tool with no progress output, so this one
+    # stays a spinner rather than a bar that would be guessing.
     with st.step("two-pass EBU R128 normalize…"):
         _two_pass_normalize(raw, master, config)
     with st.step("measuring loudness…"):
