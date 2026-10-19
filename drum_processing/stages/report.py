@@ -123,6 +123,31 @@ def render(manifest: Manifest, console: Console, warnings: list[str] | None = No
                                             (w, "value")))
 
 
+def ingest_body(manifest: Manifest, warnings: list[str] | None = None):
+    """Everything ingest found, as one renderable for a pane."""
+    from rich.console import Group
+
+    parts = []
+    if manifest.clips:
+        parts += [Text("clips", style="section"), clips_table(manifest)]
+    if manifest.stems:
+        if parts:
+            parts.append(Text(""))
+        parts += [Text("stems", style="section"), stems_table(manifest)]
+    for w in warnings or []:
+        parts.append(Text.assemble((f"{theme.GLYPHS['warn']} ", "warn"), (w, "value")))
+    return Group(*parts)
+
+
+def probe_progress(done: int, total: int, name: str) -> Text:
+    """``probing 3/6  DJI_…0025_D.MP4`` — ffprobe gives no sub-file progress,
+    so the honest unit is files."""
+    text = Text("probing ", style="label")
+    text.append(f"{done}/{total}", style="metric")
+    text.append(f"  {name}", style="muted")
+    return text
+
+
 # ---- one-line stage summaries -------------------------------------------
 
 def _counts(text: list[tuple[str, str]]) -> Text:
@@ -193,15 +218,24 @@ def render_summary(outcome) -> Text:
 
 def closing(console: Console, session_dir: Path, manifest: Manifest, *,
             elapsed_s: float, stages: list[str],
-            ref_dur: float | None = None, outcome=None) -> None:
-    """The final frame. The end of a run is what it is remembered by."""
+            ref_dur: float | None = None, outcome=None,
+            ledger: chrome.Ledger | None = None,
+            warnings: list[str] | None = None) -> None:
+    """The final frame. The end of a run is what it is remembered by.
+
+    With panes the middle of the run is erased as it goes, so the ledger is the
+    only surviving account of what each stage did — it leads the card for that
+    reason, above the run-level totals.
+    """
     from ..tui import timeline as tl
 
     out_dir = Path(session_dir) / "out"
     size, files = chrome.dir_size(out_dir)
     live = [t for t in manifest.takes if not t.dropped]
 
-    rows: list[tuple[str, Text | str]] = [("stages", "  ".join(stages))]
+    rows: list[tuple[str, Text | str]] = []
+    if ledger is None or not ledger.entries:
+        rows.append(("stages", "  ".join(stages)))
     if live:
         rows.append(("takes", _counts([(str(len(live)), "kept"),
                                        (_fmt_hms(sum(t.duration_s for t in live)),
@@ -220,4 +254,7 @@ def closing(console: Console, session_dir: Path, manifest: Manifest, *,
         rendered = frozenset(outcome.rendered) if outcome else frozenset()
         footer = tl.master_panel(manifest, ref_dur, console.width,
                                  rendered, console=console, show_markers=False)
-    chrome.summary_card(console, title="done", rows=rows, footer=footer)
+    for w in warnings or []:
+        rows.append(("", Text.assemble((f"{theme.GLYPHS['warn']} ", "warn"), (w, "warn"))))
+    header = chrome.ledger_table(console, ledger) if ledger and ledger.entries else None
+    chrome.summary_card(console, title="done", rows=rows, footer=footer, header=header)
