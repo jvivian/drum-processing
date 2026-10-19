@@ -74,8 +74,13 @@ def _take_span(manifest: Manifest, take) -> tuple[float, float]:
 
 
 def _cells(lo_frac: float, hi_frac: float, n: int) -> tuple[int, int]:
-    """Half-open cell range [i0, i1) for a fractional span (always ≥ 1 cell wide)."""
-    i0 = max(0, int(lo_frac * n))
+    """Half-open cell range [i0, i1) for a fractional span (always ≥ 1 cell wide).
+
+    ``i0`` is clamped inside the bar. A take can genuinely start past the end of
+    the reference — a late sync offset puts its audio beyond the master mix — and
+    an unclamped index there is an out-of-range cell that crashes the marker row.
+    """
+    i0 = min(max(0, int(lo_frac * n)), max(0, n - 1))
     i1 = min(n, max(i0 + 1, int(round(hi_frac * n))))
     return i0, i1
 
@@ -291,7 +296,7 @@ def legend(console: Console | None = None, *, mode: BarMode | None = None) -> Te
 def bar_cells(console: Console | None, width: int | None = None) -> int:
     """How many cells the bar gets — aligned to the content gutter, not the edge."""
     if width is None and console is not None:
-        width = chrome.content_width(console)
+        width = chrome.pane_width(console)
     return max(MIN_BAR_CELLS, min(int(width or 78), 240))
 
 
