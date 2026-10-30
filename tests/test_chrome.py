@@ -73,18 +73,21 @@ def test_stage_output_stays_inside_the_content_width(width):
         assert cell_len(line.rstrip()) <= budget
 
 
-def test_step_inside_a_collapsing_stage_does_not_open_a_second_live():
+def test_step_inside_a_pane_does_not_open_a_second_live():
     """rich allows one Live at a time and `console.status` IS a Live. Stages used
-    to open their own, which would raise LiveError inside a collapsing stage —
-    hence Stage owning the single region and `step` degrading to a line."""
+    to open their own, which would raise LiveError inside a pane — hence Stage
+    owning the single region and `step` becoming a checklist row instead."""
     console = _console(terminal=True)
-    with chrome.stage(console, "mix", collapse=True) as st:
-        assert st.collapse is True
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "mix", pane=True, ledger=ledger) as st:
+        assert st.pane is True
         for label in ("summing stems", "normalising", "measuring"):
             with st.step(label):
                 pass
         st.summary("-14.5 LUFS")
-    assert "-14.5 LUFS" in _output(console)
+    # The pane is transient, so the summary survives only via the ledger.
+    assert [e[0] for e in ledger.entries] == ["mix"]
+    assert ledger.entries[0][1].plain == "-14.5 LUFS"
 
 
 def test_stage_live_is_transient_by_default():
@@ -99,24 +102,32 @@ def test_stage_live_is_transient_by_default():
             assert live.transient is True
 
 
-def test_live_inside_a_collapsing_stage_reuses_the_region():
+def test_live_inside_a_pane_composes_instead_of_taking_over():
+    """A pane already owns the screen, so `st.live` pins the caller's renderable
+    below the body rather than replacing the stepper and log above it."""
     from rich.text import Text
 
     console = _console(terminal=True)
-    with chrome.stage(console, "render", collapse=True) as st:
-        with st.live(lambda: Text("frame")) as live:
-            live.update(Text("frame2"))
+    with chrome.stage(console, "render", stages=["render"], pane=True) as st:
+        st.item("ok", "001_t0m17s")
+        with st.live(lambda: Text("BARS")) as live:
+            live.update(Text("BARS"))
+            probe = _console(terminal=True)
+            probe.print(st.render())
+            frame = probe.file.getvalue()
+        assert "001_t0m17s" in frame and "BARS" in frame
         st.summary("done")
-    assert "done" in _output(console)
 
 
-def test_collapse_is_disabled_off_a_terminal():
-    """A transient region can't be erased from scrollback that isn't a screen."""
+def test_pane_is_disabled_off_a_terminal():
+    """A transient pane can't be erased from scrollback that isn't a screen, so
+    piped output falls all the way back to the scrolling log."""
     console = _console(terminal=False)
-    with chrome.stage(console, "mix", collapse=True) as st:
-        assert st.collapse is False
+    with chrome.stage(console, "mix", pane=True) as st:
+        assert st.pane is False
         st.line("summing stems")
-    assert "summing stems" in _output(console)
+    out = _output(console)
+    assert "summing stems" in out and "mix" in out
 
 
 def test_blank_never_doubles():
@@ -138,3 +149,32 @@ def test_human_bytes(n, expected):
 @pytest.mark.parametrize("s,expected", [(4.2, "4.2s"), (95, "1m 35s"), (3725, "1h 02m")])
 def test_human_dur(s, expected):
     assert chrome.human_dur(s) == expected
+
+
+def test_a_failed_stage_is_recorded_in_the_ledger():
+    """A run that dies mid-pipeline has already erased its panes, so the ledger
+    is the only account of the stages that did finish."""
+    console = _console(terminal=True)
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "ingest", pane=True, ledger=ledger) as st:
+        st.summary("2 clips")
+    with pytest.raises(RuntimeError):
+        with chrome.stage(console, "sync", pane=True, ledger=ledger):
+            raise RuntimeError("no stems")
+
+    assert [(name, ok) for name, _, _, ok in ledger.entries] == [
+        ("ingest", True), ("sync", False)]
+    probe = _console(terminal=True)
+    probe.print(chrome.ledger_table(probe, ledger))
+    out = _output(probe)
+    assert "ingest" in out and "sync" in out and "2 clips" in out
+
+
+def test_the_failure_line_survives_the_pane():
+    """The pane is erased on the way out; the failure must not go with it."""
+    console = _console(terminal=True)
+    with pytest.raises(RuntimeError):
+        with chrome.stage(console, "mix", pane=True) as st:
+            st.item("ok", "transient-body-line")
+            raise RuntimeError("boom")
+    assert "failed" in _output(console)

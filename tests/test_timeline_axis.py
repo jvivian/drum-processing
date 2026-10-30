@@ -94,3 +94,20 @@ def test_clip_short_keeps_the_family_prefix():
     """The old form printed a bare `0012`, matching neither the column header nor
     the clip name in any other table."""
     assert tl.clip_short("DJI_20261011152550_0012_D.MP4") == "DJI…0012"
+
+
+def test_a_take_past_the_end_of_the_reference_does_not_crash():
+    """A late sync offset can place a take's audio beyond the master mix. The
+    cell index has to stay inside the bar or the marker row indexes off the end."""
+    m = Manifest(session_dir=".")
+    m.clips.append(Clip(name="DJI_20260915_0001_D.MP4", src_path="x",
+                        duration_s=600.0, video_codec="hevc", width=1920,
+                        height=1080, fps=50.0, avg_fps=50.0, is_vfr=False))
+    m.sync.append(SyncResult(clip="DJI_20260915_0001_D.MP4", offset_s=500.0,
+                             status="ok"))
+    m.takes.append(Take(index=1, clip="DJI_20260915_0001_D.MP4",
+                        start_s=550.0, end_s=600.0))  # audio 1050–1100 > ref 600
+    model = tl.build_model(m, 600.0, 60)
+    assert max(model.starts.values()) < model.n
+    assert len(tl.marker_row(model).plain) == model.n
+    assert len(tl.bar_rows(model)[0].plain) == model.n

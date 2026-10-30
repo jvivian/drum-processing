@@ -81,6 +81,15 @@ def _apply_overrides(config: Config, *, max_silence: float | None = None,
         config.mix.target_lufs = lufs
 
 
+def _show_ledger(ledger: chrome.Ledger) -> None:
+    """A single-stage command has no closing card, so its one ledger line is
+    the whole permanent record of what just happened."""
+    if ledger.entries:
+        chrome.blank(console)
+        chrome.write(console, chrome.ledger_table(console, ledger))
+        chrome.blank(console)
+
+
 def _show_timeline(session_dir: Path, manifest: Manifest) -> None:
     """Static bar + breakdown — used by `status`."""
     ref_dur = _ref_dur(session_dir)
@@ -100,10 +109,16 @@ def ingest(session_dir: Path = DirArg) -> None:
     """Discover + probe media, build the manifest (stage 0)."""
     session_dir = session_dir.expanduser().resolve()
     config = Config.load(session_dir)
-    with chrome.stage(console, "ingest") as st:
-        manifest, warnings = ingest_stage.ingest(session_dir, config)
-        report_stage.render(manifest, console, warnings, sections=("clips", "stems"))
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "ingest", pane=True, ledger=ledger) as st:
+        manifest, warnings = ingest_stage.ingest(
+            session_dir, config,
+            on_file=lambda n, of, name: st.set_body(
+                report_stage.probe_progress(n, of, name)))
+        st.set_body(report_stage.ingest_body(manifest, warnings))
         st.summary(report_stage.ingest_summary(manifest, warnings))
+    _show_ledger(ledger)
+    report_stage.render(manifest, console, warnings, sections=("clips", "stems"))
 
 
 @app.command()
@@ -135,12 +150,14 @@ def sync(
     from .tui import review_sync
 
     manifest, config = _load(session_dir)
-    with chrome.stage(console, "sync") as st:
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "sync", pane=True, ledger=ledger) as st:
         sync_stage.run(session_dir, manifest, config, st)
         st.summary(report_stage.sync_summary(manifest))
+    _show_ledger(ledger)
+    report_stage.render(manifest, console, sections=("sync",))
     if not yes:
         review_sync.review(session_dir, manifest, config, console)
-        report_stage.render(manifest, console, sections=("sync",))
 
 
 @app.command()
@@ -153,9 +170,11 @@ def mix(
 
     manifest, config = _load(session_dir)
     _apply_overrides(config, lufs=lufs)
-    with chrome.stage(console, "mix", collapse=True) as st:
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "mix", pane=True, ledger=ledger) as st:
         mix_stage.run(session_dir, manifest, config, st)
         st.summary(report_stage.mix_summary(manifest, config))
+    _show_ledger(ledger)
 
 
 @app.command()
@@ -173,10 +192,14 @@ def takes(
 
     manifest, config = _load(session_dir)
     _apply_overrides(config, max_silence=max_silence, min_take=min_take)
-    with chrome.stage(console, "takes") as st:
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "takes", pane=True, ledger=ledger) as st:
         takes_stage.run(session_dir, manifest, config, st)
-        st.block("takes by clip", tl.breakdown(manifest))
         st.summary(report_stage.takes_summary(manifest))
+    _show_ledger(ledger)
+    # Printed once, after the pane is gone. Drawing it inside the pane as well
+    # only made it flash: the pane is scaffolding, this is the command's output.
+    chrome.section(console, "takes by clip", tl.breakdown(manifest))
     if not yes:
         review_takes.review(session_dir, manifest, config, console)
 
@@ -196,14 +219,16 @@ def render(
     manifest, config = _load(session_dir)
     _apply_overrides(config, bw_mode=bw_mode, stems=stems)
     t0 = time.monotonic()
-    with chrome.stage(console, "render") as st:
+    ledger = chrome.Ledger()
+    with chrome.stage(console, "render", pane=True, ledger=ledger) as st:
         outcome = render_stage.run(session_dir, manifest, config, st, full_clips=full)
         st.summary(report_stage.render_summary(outcome))
     # The live timeline is transient, so the closing card is where the finished
     # one gets printed — same as `run`.
     report_stage.closing(console, session_dir, manifest,
                          elapsed_s=time.monotonic() - t0, stages=["render"],
-                         ref_dur=_ref_dur(session_dir), outcome=outcome)
+                         ref_dur=_ref_dur(session_dir), outcome=outcome,
+                         ledger=ledger)
 
 
 @app.command()
@@ -243,49 +268,65 @@ def run(
     from .tui import timeline as tl
 
     step = iter(range(1, total + 1))
+    ledger = chrome.Ledger()
     outcome = None
+    warnings: list[str] = []
 
-    if "ingest" in active:
-        with chrome.stage(console, "ingest", index=next(step), total=total) as st:
-            manifest, warnings = ingest_stage.ingest(session_dir, config)
-            report_stage.render(manifest, console, warnings, sections=("clips", "stems"))
-            st.summary(report_stage.ingest_summary(manifest, warnings))
-    else:
-        manifest = Manifest.load(session_dir)
-        if not manifest.clips:
-            raise _fail("No manifest yet — run ingest first.")
+    def frame(name: str, **kw):
+        """Every stage in a run is a pane over the same stepper and ledger."""
+        return chrome.stage(console, name, index=next(step), total=total,
+                            stages=active, pane=True, ledger=ledger, **kw)
 
-    if "sync" in active:
-        with chrome.stage(console, "sync", index=next(step), total=total) as st:
-            sync_stage.run(session_dir, manifest, config, st)
-            st.summary(report_stage.sync_summary(manifest))
-        # Reviews sit outside the stage frame: prompt_toolkit draws its own screen
-        # and will not cooperate with a live region.
-        if not yes:
-            review_sync.review(session_dir, manifest, config, console)
+    try:
+        if "ingest" in active:
+            with frame("ingest") as st:
+                manifest, warnings[:] = ingest_stage.ingest(
+                    session_dir, config,
+                    on_file=lambda n, of, name: st.set_body(
+                        report_stage.probe_progress(n, of, name)))
+                st.set_body(report_stage.ingest_body(manifest, warnings))
+                st.summary(report_stage.ingest_summary(manifest, warnings))
+        else:
+            manifest = Manifest.load(session_dir)
+            if not manifest.clips:
+                raise _fail("No manifest yet — run ingest first.")
 
-    if "mix" in active:
-        with chrome.stage(console, "mix", index=next(step), total=total,
-                          collapse=True) as st:
-            mix_stage.run(session_dir, manifest, config, st)
-            st.summary(report_stage.mix_summary(manifest, config))
+        if "sync" in active:
+            with frame("sync") as st:
+                sync_stage.run(session_dir, manifest, config, st)
+                st.summary(report_stage.sync_summary(manifest))
+            # Reviews sit outside the stage frame: prompt_toolkit draws its own
+            # screen and will not cooperate with a live region.
+            if not yes:
+                review_sync.review(session_dir, manifest, config, console)
 
-    if "takes" in active:
-        with chrome.stage(console, "takes", index=next(step), total=total) as st:
-            takes_stage.run(session_dir, manifest, config, st)
-            st.block("takes by clip", tl.breakdown(manifest))
-            st.summary(report_stage.takes_summary(manifest))
-        if not yes:
-            review_takes.review(session_dir, manifest, config, console)
+        if "mix" in active:
+            with frame("mix") as st:
+                mix_stage.run(session_dir, manifest, config, st)
+                st.summary(report_stage.mix_summary(manifest, config))
 
-    if "render" in active:
-        with chrome.stage(console, "render", index=next(step), total=total) as st:
-            outcome = render_stage.run(session_dir, manifest, config, st)
-            st.summary(report_stage.render_summary(outcome))
+        if "takes" in active:
+            with frame("takes") as st:
+                takes_stage.run(session_dir, manifest, config, st)
+                st.block("takes by clip", tl.breakdown(manifest))
+                st.summary(report_stage.takes_summary(manifest))
+            if not yes:
+                review_takes.review(session_dir, manifest, config, console)
+
+        if "render" in active:
+            with frame("render") as st:
+                outcome = render_stage.run(session_dir, manifest, config, st)
+                st.summary(report_stage.render_summary(outcome))
+    except BaseException:
+        # The stages that did finish still did work worth accounting for, and
+        # with panes their output is already gone from the screen.
+        _show_ledger(ledger)
+        raise
 
     report_stage.closing(console, session_dir, manifest,
                          elapsed_s=time.monotonic() - t_run, stages=active,
-                         ref_dur=_ref_dur(session_dir), outcome=outcome)
+                         ref_dur=_ref_dur(session_dir), outcome=outcome,
+                         ledger=ledger, warnings=warnings)
     if rm:
         _clean_work(session_dir)
 

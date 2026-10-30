@@ -17,12 +17,14 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from rich.table import Table
 from rich.text import Text
 
 from ..config import Config
 from ..gcc_phat import fit_drift, gcc_phat
 from ..manifest import Manifest, SyncResult
 from ..onset import onset_envelope
+from ..tui import chrome, theme
 from ..tui.timeline import clip_short
 from .reference import CORRELATION_FS, ensure_reference
 from .scratch import ensure_scratch
@@ -121,6 +123,30 @@ def _result_detail(res: SyncResult) -> Text:
     return text
 
 
+def _checklist(st, clips, results: dict) -> Table:
+    """Every clip up front, each resolving in place as it is aligned.
+
+    Only worth drawing in a pane: in scrollback a pending row would still be
+    there, stale, after the clip finished — so the log keeps one line per
+    completed clip instead.
+    """
+    # No header: a status glyph, a clip name and its numbers need no labelling,
+    # and empty header cells read as a mistake.
+    t = chrome.table(chrome.c_text(""), chrome.c_name(""), chrome.c_name(""),
+                     show_header=False)
+    for clip in clips:
+        res = results.get(clip.name)
+        if res is None:
+            t.add_row(Text(theme.GLYPHS["pending"], style="pending"),
+                      Text(clip_short(clip.name), style="faint"),
+                      Text("waiting", style="faint"))
+        else:
+            t.add_row(theme.status_text(st.console, res.status),
+                      Text(clip_short(clip.name), style="value"),
+                      _result_detail(res))
+    return t
+
+
 def run(session_dir: Path, manifest: Manifest, config: Config, st) -> None:
     session_dir = Path(session_dir)
     hop, nfft = config.sync.env_hop, config.sync.env_nfft
@@ -130,13 +156,20 @@ def run(session_dir: Path, manifest: Manifest, config: Config, st) -> None:
         ref_env, efs = onset_envelope(_load_mono(ref_path), CORRELATION_FS, hop, nfft)
 
     results: list[SyncResult] = []
+    done: dict[str, SyncResult] = {}
+    if st.pane:
+        st.set_body(_checklist(st, manifest.clips, done))
     for clip in manifest.clips:
         with st.step(f"syncing {clip.name}"):
             scratch = ensure_scratch(session_dir, clip)
             clip_env, _ = onset_envelope(_load_mono(scratch), CORRELATION_FS, hop, nfft)
             res = sync_clip(clip_env, ref_env, efs, clip.duration_s, clip.name, config)
         results.append(res)
-        st.item(res.status, f"{clip_short(clip.name)}  ", _result_detail(res))
+        done[clip.name] = res
+        if st.pane:
+            st.set_body(_checklist(st, manifest.clips, done))
+        else:
+            st.item(res.status, f"{clip_short(clip.name)}  ", _result_detail(res))
 
     manifest.sync = results
     manifest.mark_done("sync")

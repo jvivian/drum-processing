@@ -8,6 +8,7 @@ under ``work/`` and ``out/``. Paths in the manifest are relative to the session 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from ..config import Config
@@ -38,9 +39,16 @@ def _assign_role(name: str, config: Config) -> str | None:
     return m.group(1).upper() if m else None
 
 
-def ingest(session_dir: Path, config: Config) -> tuple[Manifest, list[str]]:
+def ingest(session_dir: Path, config: Config,
+           on_file: Callable[[int, int, str], None] | None = None,
+           ) -> tuple[Manifest, list[str]]:
     """Build (or rebuild) the manifest for ``session_dir``. Returns the manifest and
-    a list of human-readable warnings for the report."""
+    a list of human-readable warnings for the report.
+
+    ``on_file(done, total, name)`` fires before each ffprobe. It is a plain
+    callback rather than a Stage so the presentation layer stays out of here;
+    ffprobe reports nothing mid-file, so files are the only honest unit.
+    """
     session_dir = Path(session_dir)
     warnings: list[str] = []
 
@@ -60,6 +68,14 @@ def ingest(session_dir: Path, config: Config) -> tuple[Manifest, list[str]]:
     for p in video_files:
         by_key.setdefault(_clip_key(p), []).append(p)
 
+    probed, to_probe = 0, len(by_key) + len(audio_files)
+
+    def _note(name: str) -> None:
+        nonlocal probed
+        probed += 1
+        if on_file is not None:
+            on_file(probed, to_probe, name)
+
     clips: list[Clip] = []
     for _key, group in sorted(by_key.items()):
         originals = [p for p in group if not CONVERTED_RE.search(p.name)]
@@ -70,6 +86,7 @@ def ingest(session_dir: Path, config: Config) -> tuple[Manifest, list[str]]:
                 f"{chosen.name}: only a -converted (likely downscaled) copy found; "
                 "the HEVC original is the master — stop deleting originals."
             )
+        _note(chosen.name)
         pr = probe(chosen)
         if pr.is_vfr:
             warnings.append(
@@ -95,6 +112,7 @@ def ingest(session_dir: Path, config: Config) -> tuple[Manifest, list[str]]:
 
     stems: list[Stem] = []
     for p in sorted(audio_files):
+        _note(p.name)
         pr = probe(p)
         role = _assign_role(p.name, config)
         if pr.audio_sample_rate and pr.audio_sample_rate != config.mix.sample_rate:

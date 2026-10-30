@@ -34,15 +34,17 @@ def manifest():
 
 
 def _run(console, manifest, tmp_path, fake, config=None):
+    """Drive the real path: production renders inside a pane, not a scrolling log."""
     config = config or Config()
     config.output.sidecars = False
-    with chrome.stage(console, "render") as st:
+    with chrome.stage(console, "render", stages=["render"], index=1, total=1,
+                      pane=True) as st:
         return render_stage._render_takes(tmp_path, manifest, config, st,
                                           ref_dur=600.0, render=fake)
 
 
 def _progress_bars(renderable):
-    """Every Progress in a renderable tree (rich nests the Live's Group)."""
+    """Every Progress in a renderable tree."""
     from rich.console import Group
     from rich.progress import Progress
 
@@ -99,23 +101,29 @@ def test_finished_item_bars_are_retired(console, manifest, tmp_path):
     live region eventually outgrew the terminal. Sampled mid-render: never more
     than one per-item bar, and never more than one aggregate bar.
     """
-    item_counts, heights = [], []
+    item_counts, bar_heights, frames = [], [], []
     config = Config()
     config.output.sidecars = False
 
-    with chrome.stage(console, "render") as st:
+    with chrome.stage(console, "render", stages=["render"], index=1, total=1,
+                      pane=True) as st:
         def observe():
-            bars = _progress_bars(st._live.renderable)
+            # `_extra` is the live region now: the timeline plus the bars.
+            bars = _progress_bars(st._extra)
             # One aggregate task plus the take currently encoding — never a
             # backlog of finished bars.
             item_counts.append(sum(len(p.tasks) for p in bars))
-            heights.append(len(console.render_lines(st._live.renderable)))
+            bar_heights.append(chrome.measure(console, st._extra))
+            frames.append(st.height())
 
         render_stage._render_takes(tmp_path, manifest, config, st, ref_dur=600.0,
                                    render=_reporting_fake(observer=observe))
 
     assert item_counts == [2, 2, 2]
-    assert max(heights) - min(heights) <= 1  # fixed height, not growing
+    assert max(bar_heights) - min(bar_heights) <= 1  # fixed height, not growing
+    # The per-take log grows, but the pane as a whole must never overrun its
+    # budget — that is what the fit() clamp is for.
+    assert max(frames) <= chrome.pane_budget(console)
 
 
 def test_one_failed_take_does_not_abort_the_rest(console, manifest, tmp_path):
@@ -131,11 +139,41 @@ def test_bytes_written_is_tallied(console, manifest, tmp_path):
 
 
 def test_each_take_leaves_a_log_line(console, manifest, tmp_path):
-    """Finished bars are removed, so the permanent record is the scrolling log."""
-    _run(console, manifest, tmp_path, _reporting_fake())
-    out = console.file.getvalue()
+    """Finished bars are retired; the record of what rendered is the log body."""
+    config = Config()
+    config.output.sidecars = False
+    with chrome.stage(console, "render", stages=["render"], index=1, total=1,
+                      pane=True) as st:
+        render_stage._render_takes(tmp_path, manifest, config, st, ref_dur=600.0,
+                                   render=_reporting_fake())
+        body = "\n".join(t.plain for t in st._body)
     for take in manifest.takes:
-        assert render_stage.take_label(take) in out
+        assert render_stage.take_label(take) in body
+
+
+@pytest.mark.parametrize("height", [10, 18, 24, 60])
+@pytest.mark.parametrize("ntakes", [3, 40])
+def test_pane_never_overruns_its_budget(manifest, tmp_path, height, ntakes):
+    """The property that keeps every width/height defect from coming back."""
+    from drum_processing.manifest import Take
+
+    manifest.takes = [Take(index=i, clip=manifest.clips[0].name,
+                           start_s=i * 20.0, end_s=i * 20.0 + 15)
+                      for i in range(1, ntakes + 1)]
+    console = Console(file=io.StringIO(), width=100, height=height,
+                      theme=theme.THEME, highlight=False, force_terminal=True,
+                      color_system="truecolor")
+    seen = []
+    config = Config()
+    config.output.sidecars = False
+    with chrome.stage(console, "render", stages=["render"], index=1, total=1,
+                      pane=True) as st:
+        def observe():
+            seen.append(st.height())
+
+        render_stage._render_takes(tmp_path, manifest, config, st, ref_dur=1200.0,
+                                   render=_reporting_fake(observer=observe))
+    assert seen and max(seen) <= chrome.pane_budget(console)
 
 
 def test_take_label_format(manifest):

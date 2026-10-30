@@ -17,6 +17,7 @@ from ..config import Config
 from ..manifest import Clip, Manifest, SyncResult, Take
 from ..media import has_nvenc
 from ..media import run as ff_run
+from ..tui import chrome
 from .mix import MASTER_REL
 from .reference import CORRELATION_FS  # noqa: F401  (kept for parity/imports)
 
@@ -98,8 +99,6 @@ def run(session_dir: Path, manifest: Manifest, config: Config, st,
 
 
 def _render_full_clips(session_dir, manifest, config, st, ref_dur) -> RenderOutcome:
-    from ..tui.progress import stage_progress
-
     out_dir = session_dir / "out"
     out_dir.mkdir(exist_ok=True)
     synced = [(c, manifest.sync_for(c.name)) for c in manifest.clips]
@@ -110,17 +109,17 @@ def _render_full_clips(session_dir, manifest, config, st, ref_dur) -> RenderOutc
 
     t0 = time.monotonic()
     written = 0
-    with stage_progress(st.console) as track:
-        for clip, sync in synced:
-            clip_in, clip_out = sync.overlap(clip, ref_dur)
-            if clip_out - clip_in < 1.0:
-                continue
-            out_path = out_dir / f"{Path(clip.name).stem}_bw.mp4"
-            track(clip.name, (clip_out - clip_in),
-                  lambda cb, c=clip, s=sync, ci=clip_in, co=clip_out, o=out_path:
-                  render_segment(session_dir, c, s, config, ci, co, o, on_progress=cb))
-            if out_path.is_file():
-                written += out_path.stat().st_size
+    for clip, sync in synced:
+        clip_in, clip_out = sync.overlap(clip, ref_dur)
+        if clip_out - clip_in < 1.0:
+            continue
+        out_path = out_dir / f"{Path(clip.name).stem}_bw.mp4"
+        with st.bar(clip.name, clip_out - clip_in) as advance:
+            render_segment(session_dir, clip, sync, config, clip_in, clip_out,
+                           out_path, on_progress=advance)
+        size = out_path.stat().st_size if out_path.is_file() else 0
+        written += size
+        st.item("ok", clip.name, chrome.human_bytes(size) if size else "")
     return RenderOutcome(bytes_written=written, elapsed_s=time.monotonic() - t0)
 
 
